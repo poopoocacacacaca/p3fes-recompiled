@@ -15,7 +15,12 @@ The game's MIPS R5900 code is statically recompiled to C++ and run on a reimplem
 
 > [!IMPORTANT]
 > No game files are included: no ELF, IRX modules, `.CVM` archives or code generated from them.
-> You need your own copy of Persona 3 FES (NTSC-U) to generate the code locally.
+> You need **your own copy** of Persona 3 FES, NTSC-U, PS2 ID **`SLUS-21621`**, matching the
+> [Redump record](http://redump.org/disc/4125/). The port is built against that disc's executable:
+>
+> | File | SHA-1 |
+> |---|---|
+> | `SLUS_216.21` | `7ca061aac239e53e86bcd4c0ce8e19e987d8a75f` |
 
 ## Status
 
@@ -111,7 +116,7 @@ third_party/pcsx2-gs/  PCSX2's GS as a shared library with a C API
 
 See [`p3fes/README.md`](p3fes/README.md). In short:
 
-1. Build `ps2xRecomp`, copy `SLUS_216.21` from your disc next to `p3fes/p3fes.toml` and run `ps2_recomp p3fes.toml`.
+1. Build `ps2xRecomp`, copy `SLUS_216.21` from your `SLUS-21621` disc (check its SHA-1 above) next to `p3fes/p3fes.toml` and run `ps2_recomp p3fes.toml`.
 2. Copy the generated C++ into `ps2xRuntime/src/runner/` and its two headers into `ps2xRuntime/include/`.
 3. Build `ps2xRuntime` (Windows: llvm-mingw or MSVC).
 4. Put the executable, `run.bat`, `SLUS_216.21`, `SYSTEM.CNF`, `LIB31\` and the `.CVM` files in one folder.
@@ -146,7 +151,9 @@ Debug traces: `PS2X_SPU2_DIAG`, `PS2X_GS_DIAG`, `PS2X_IPU_TRACE`, `PS2X_DMA_LOG`
 - [urban-reign-recomp](https://github.com/thiagordsfx/urban-reign-recomp) by thiagordsfx: the PCSX2 GS bridge design.
 - [PCSX2](https://github.com/PCSX2/pcsx2): the IPU and GS, and the accuracy reference.
 - [ps2-web-recomp](https://github.com/snuri00/ps2-web-recomp): SPU2, IPU and GPU GS reference.
-- The snaku Persona 3 FES decompilation, for function names.
+- The [snaku Persona 3 FES decompilation](https://github.com/snaku/Persona3-FES-Decompilation), for function names.
+- The [Persona 4 decompilation](https://github.com/Raikaru/Persona4-Decompilation) by Raikaru: names for shared
+  engine, RenderWare and CRI functions, transferred by `p3fes/scripts/p4_names.py` (`p3fes/names/p4_names.csv`).
 
 *Persona 3 FES* is © ATLUS / SEGA. This is an unofficial, non-commercial fan project, not affiliated with or endorsed
 by ATLUS or SEGA. Licensed under **GPL-3.0** (PS2Recomp, PCSX2 and god-of-war-recomp code is GPL); distributing a
