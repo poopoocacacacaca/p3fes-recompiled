@@ -466,6 +466,11 @@ elseif(EXISTS "${ROOT_MAIN_CPP}")
     list(APPEND RUNNER_SRC_FILES "${ROOT_MAIN_CPP}")
 endif()
 
+# Sampling profiler (PS2X_PROFILE); linked into the executable so its static
+# initializer is not dropped from the static library.
+set(PS2X_PROFILER_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/ps2_profiler.cpp")
+list(APPEND RUNNER_SRC_FILES "${PS2X_PROFILER_CPP}")
+
 if(PS2X_IS_ANDROID)
     add_library(ps2EntryRunner SHARED
         ${RUNNER_SRC_FILES}
@@ -481,7 +486,7 @@ endif()
 if(PS2X_ENABLE_RUNNER_UNITY_BUILD)
     # Keep the hand-written runner entry point out of the generated-code unity
     # batches so editing it does not recompile recompiled game functions.
-    set_source_files_properties("${ROOT_MAIN_CPP}" "${RUNNER_MAIN_CPP}" PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+    set_source_files_properties("${ROOT_MAIN_CPP}" "${RUNNER_MAIN_CPP}" "${PS2X_PROFILER_CPP}" PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
     set_target_properties(ps2EntryRunner PROPERTIES
         UNITY_BUILD ON
         UNITY_BUILD_BATCH_SIZE "${PS2X_RUNNER_UNITY_BUILD_BATCH_SIZE}"
