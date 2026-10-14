@@ -1,5 +1,10 @@
 <div align="center">
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="p3fes/branding/logo-dark.png">
+  <img src="p3fes/branding/logo-light.png" alt="Persona 3 FES Recompiled" width="85%">
+</picture>
+
 # Static Recompilation of Persona 3 FES (PS2)
 
 **An attempt at a static recompilation of *Shin Megami Tensei: Persona 3 FES* (NTSC-U `SLUS-21621`)**<br>
@@ -148,6 +153,7 @@ Debug traces: `PS2X_SPU2_DIAG`, `PS2X_GS_DIAG`, `PS2X_IPU_TRACE`, `PS2X_DMA_LOG`
 
 ## Credits
 
+- Logo lettering: [Faktos](https://maylett.net/cmd/faktos.html) and [BM Space](https://www.dafont.com/bm-space.font) (free font).
 - [PS2Recomp](https://github.com/ran-j/PS2Recomp) by ran-j and contributors: the recompiler and runtime this port is built on.
 - [god-of-war-recomp](https://github.com/KIexster/god-of-war-recomp) by KIexster: SPU2, SIO2, IOP and VU1 work and many
   EE/GS fixes, merged here, plus the status map design.
