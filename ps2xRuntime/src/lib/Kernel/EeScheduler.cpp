@@ -1,6 +1,7 @@
 #include "runtime/ee_scheduler.h"
 
 #include "ps2_log.h"
+#include "runtime/ps2_perf.h"
 #include "ps2_runtime_macros.h"
 
 #include <algorithm>
@@ -11,6 +12,8 @@
 #include <limits>
 #include <stdexcept>
 #include <unordered_map>
+
+void gowCountGuestFrame(uint32_t pc, const uint8_t *rdram); // GOW-Port: ps2_runtime.cpp (velocidad del juego)
 
 namespace
 {
@@ -154,6 +157,8 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
     m_insideInterrupt = false;
     m_pendingEeTimerInterrupts = 0u;
     m_eeCycle = 0u;
+    // GOW-Port: reiniciar base y valor juntos, sin heredar el reloj de otra ejecución.
+    m_runtime.writeCop0Count(nullptr, mainContext.cop0_count);
     m_sliceEndCycle = kDefaultTimeSliceCycles;
     m_stopRequested.store(false, std::memory_order_release);
     m_checkpointPending.store(false, std::memory_order_release);
@@ -196,6 +201,7 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
 
 void EeScheduler::run()
 {
+    ps2_perf::Scope perf(ps2_perf::Bucket::Ee); // GOW-Port: tiempos exclusivos del ejecutor.
     assertExecutor();
     m_running.store(true, std::memory_order_release);
 
@@ -399,12 +405,17 @@ void EeScheduler::run()
                     std::fflush(stderr);
                 }
             }
+            ps2_perf::guestEntry(context.pc);
+            gowCountGuestFrame(context.pc, m_rdram);
+            loadSharedVu0Random(context);
             function(m_rdram, &context, &m_runtime);
+            saveSharedVu0Random(context);
             m_guestExecuting.store(false, std::memory_order_release);
             m_insideInterrupt = false;
         }
         catch (const EeDispatcherTransfer &)
         {
+            saveSharedVu0Random(context);
             m_guestExecuting.store(false, std::memory_order_release);
             m_insideInterrupt = false;
         }
@@ -1823,8 +1834,10 @@ void EeScheduler::makeRunning(GuestThread &item)
     renewTimeSlice();
 }
 
+void gowDumpBranchRing(const char *why);
 void EeScheduler::makeDormant(GuestThread &item)
 {
+    { static int n = 0; if (item.id == 1 && n++ < 1) gowDumpBranchRing("main thread dormant"); }
     removeReady(item);
     removeFromWaitObject(item);
     item.status = EeThreadStatus::Dormant;
@@ -1926,6 +1939,31 @@ void EeScheduler::applyPendingPreemption()
     m_timeSliceExpired = false;
 }
 
+namespace
+{
+    // GOW-Port: estado del flanco de la interrupcion del GS (solo se usa en el hilo ejecutor). Se guarda
+    // aqui y no en EeScheduler para no cambiar el tamano de la clase.
+    uint32_t g_gsIrqLatched = 0u;
+}
+
+void EeScheduler::pollGsInterrupt()
+{
+    // GOW-Port: el runtime marcaba CSR.FINISH/SIGNAL pero nunca lanzaba la interrupcion del GS (INTC 0).
+    // God of War espera el fin de cada cadena DMA con un manejador de esa interrupcion
+    // (vid::WaitForDMAComplete se queda esperando una bandera que solo pone ese manejador).
+    // IMR: bit 8 = SIGMSK, bit 9 = FINISHMSK (1 = enmascarada). El manejador borra el bit escribiendo CSR.
+    auto &gs = m_runtime.memory().gs();
+    const uint32_t csr = static_cast<uint32_t>(gs.csr.load(std::memory_order_acquire)) & 0x3u;
+    const uint32_t masked = static_cast<uint32_t>(gs.imr >> 8) & 0x3u;
+    const uint32_t active = csr & ~masked;
+    const uint32_t rising = active & ~g_gsIrqLatched;
+    g_gsIrqLatched = active;
+    if (rising != 0u)
+    {
+        dispatchIrq(false, 0u);
+    }
+}
+
 void EeScheduler::processPendingEvents()
 {
     assertExecutor();
@@ -1939,6 +1977,7 @@ void EeScheduler::processPendingEvents()
             dispatchIrq(false, 9u + timer);
         }
     }
+    pollGsInterrupt();
     std::deque<EeEvent> pending;
     {
         std::lock_guard lock(m_eventMutex);
@@ -2063,6 +2102,8 @@ void EeScheduler::processEvent(const EeEvent &event)
         {
             m_runtime.memory().gs().csr.fetch_and(~0x2000ull, std::memory_order_acq_rel);
         }
+        // GOW-Port: registros coherentes desde el EE, antes de despertar callbacks del juego.
+        m_runtime.gs().notifyExternalVSync(m_vsyncTick, static_cast<uint32_t>(m_vsyncTick & 1u));
         writeGuestU32(m_vsyncFlagAddress, 1u);
         if (m_vsyncTickAddress != 0u)
         {
@@ -2182,6 +2223,7 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
 
 void EeScheduler::waitForEvent()
 {
+    ps2_perf::Scope perf(ps2_perf::Bucket::GuestWait);
     std::unique_lock lock(m_eventMutex);
     if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
     {
@@ -2297,6 +2339,22 @@ void EeScheduler::copyMainContextToRuntime()
     {
         m_runtime.m_cpuContext = main->context;
     }
+}
+
+void EeScheduler::loadSharedVu0Random(R5900Context &context)
+{
+    if (!m_sharedVu0RandomValid)
+    {
+        saveSharedVu0Random(context);
+        return;
+    }
+    context.vu0_r = m_sharedVu0Random;
+}
+
+void EeScheduler::saveSharedVu0Random(const R5900Context &context)
+{
+    m_sharedVu0Random = context.vu0_r;
+    m_sharedVu0RandomValid = true;
 }
 
 void EeScheduler::publishDebugContext(const R5900Context &context)

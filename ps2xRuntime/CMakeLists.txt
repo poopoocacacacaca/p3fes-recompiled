@@ -383,7 +383,15 @@ add_library(ps2_runtime STATIC
     src/lib/ps2_audio_vag.cpp
     src/lib/gs/ps2_gs_memory.cpp
     src/lib/gs/gs_frontend.cpp
+    src/lib/gs/gs_host_present.cpp # GOW-Port: mismo consumidor de textura en juego y controles.
+    src/lib/gs/gs_host_acquired_capture.cpp # GOW-Port: descarga opcional y acotada de Acquire.
     src/lib/gs/gs_cpu_backend.cpp
+    # GOW-Port: backend OpenGL y cola del fork SotC ac9efa0 (GPL-3.0).
+    src/lib/gs/gs_threaded_backend.cpp
+    src/lib/gs/gs_swizzle.cpp
+    src/lib/gs/gpu/gs_gl.cpp
+    src/lib/gs/gpu/gs_gpu_backend.cpp
+    src/lib/gs/gpu/gs_gpu_shaders.cpp
     src/lib/ps2_iop_host.cpp
     src/lib/ps2_memory.cpp
     src/lib/ps2_pad.cpp
@@ -518,10 +526,49 @@ target_include_directories(ps2_runtime PUBLIC
 )
 
 target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ffmpeg ps2_iop)
+if(WIN32)
+    # GOW-Port: WGL propio del hilo GS.
+    target_link_libraries(ps2_runtime PRIVATE opengl32 gdi32)
+endif()
 target_link_libraries(ps2EntryRunner
     PRIVATE
     ps2_runtime
 )
+
+# GOW-Port: microcódigo de VU1 compilado. PS2X_VU1_MICROCODE_DIR es una carpeta local con micromemorias de
+# 16 KB capturadas con GOW_VU1_CAPTURA; PS2X_VU1_GENERATOR_SOURCE es tools/vu1/generar_vu1.cpp. El C++
+# generado se enlaza en el ejecutable y el despachador lo usa en lugar del intérprete para los pares que
+# coinciden. Son datos del juego: se generan en la carpeta de compilación y no se publican.
+set(PS2X_VU1_MICROCODE_DIR "" CACHE PATH "Micromemorias de VU1 capturadas (vacío: solo intérprete)")
+set(PS2X_VU1_GENERATOR_SOURCE "" CACHE FILEPATH "Generador de C++ para VU1 (tools/vu1/generar_vu1.cpp)")
+if(PS2X_VU1_MICROCODE_DIR AND PS2X_VU1_GENERATOR_SOURCE AND NOT PS2X_IS_ANDROID AND NOT PS2X_IS_VITA)
+    file(GLOB PS2X_VU1_IMAGES CONFIGURE_DEPENDS "${PS2X_VU1_MICROCODE_DIR}/*.bin")
+    if(PS2X_VU1_IMAGES)
+        add_executable(ps2x_vu1_generator "${PS2X_VU1_GENERATOR_SOURCE}")
+        target_link_libraries(ps2x_vu1_generator PRIVATE ps2_runtime)
+        set(PS2X_VU1_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/vu1_generado")
+        set(PS2X_VU1_GENERATED_PARTS)
+        foreach(part RANGE 0 12)
+            list(APPEND PS2X_VU1_GENERATED_PARTS "${PS2X_VU1_GENERATED_DIR}/programa${part}.cpp")
+        endforeach()
+        add_custom_command(OUTPUT ${PS2X_VU1_GENERATED_PARTS}
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${PS2X_VU1_GENERATED_DIR}"
+            # GOW-Port: la carpeta, no cada archivo: miles de rutas superan la línea de órdenes de Windows.
+            COMMAND "$<TARGET_FILE:ps2x_vu1_generator>" "${PS2X_VU1_GENERATED_DIR}" "${PS2X_VU1_MICROCODE_DIR}"
+            DEPENDS ps2x_vu1_generator ${PS2X_VU1_IMAGES}
+            VERBATIM)
+        target_sources(ps2EntryRunner PRIVATE ${PS2X_VU1_GENERATED_PARTS})
+        set_source_files_properties(${PS2X_VU1_GENERATED_PARTS} PROPERTIES
+            SKIP_UNITY_BUILD_INCLUSION ON
+            SKIP_PRECOMPILE_HEADERS ON)
+        target_include_directories(ps2EntryRunner PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/vu")
+        if(MSVC)
+            set_source_files_properties(${PS2X_VU1_GENERATED_PARTS} PROPERTIES COMPILE_OPTIONS "/bigobj")
+        endif()
+        list(LENGTH PS2X_VU1_IMAGES PS2X_VU1_IMAGE_COUNT)
+        message(STATUS "VU1 compilada: ${PS2X_VU1_IMAGE_COUNT} micromemorias en ${PS2X_VU1_MICROCODE_DIR}")
+    endif()
+endif()
 
 if(PS2X_ENABLE_DEBUG_UI AND NOT PS2X_IS_VITA AND NOT PS2X_IS_ANDROID)
     target_sources(ps2EntryRunner PRIVATE
