@@ -1,143 +1,244 @@
 #!/usr/bin/env python3
 """Render p3fes/status/status.toml into p3fes/status/progress.svg (shown in the README).
 
-A square-tile grid in Persona 3 FES colours: deep night blue, sea blue and moonlight cyan. Each tile fills from the
-bottom like a rising tide, to the phase's completion.
+A compact status map: the executable's functions by module and the PS2 hardware as treemaps, and the road to a
+playable port as one strip. Colours: Dark Hour green = working, Persona 3 Reload blue = partial, FES red = pending.
+Follows the viewer's light/dark theme on GitHub.
 """
+import csv
+import math
 import pathlib
+import re
 import tomllib
 from xml.sax.saxutils import escape
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 data = tomllib.loads((ROOT / "status" / "status.toml").read_text())
 
-C = {
-    "bg": "#070f26", "bg2": "#0c1d4a", "tile": "#10224f", "edge": "#2a4c9a",
-    "done": "#5fe4ff", "partial": "#2f7dff", "todo": "#3a4d7a", "hle": "#a9c8ff",
-    "text": "#ffffff", "muted": "#9fb6e6",
-}
-COLS = 4
-GAP = 12
-PAD = 24
-W = 840
-T = (W - 2 * PAD - (COLS - 1) * GAP) / COLS  # tile side
-FONT = "'Arial Black','Segoe UI',Helvetica,Arial,sans-serif"
-
+W, PAD, GAP = 900, 16, 12
+PANEL_W = (W - 2 * PAD - 2 * GAP) / 2
+PANEL_H = 236
 out = []
-clip_id = 0
 
 
-def text(x, y, s, size=13, weight="bold", color=C["text"], anchor="start", italic=False, opacity=1.0):
-    style = ' font-style="italic"' if italic else ""
-    out.append(f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size}" font-weight="{weight}" fill="{color}" '
-               f'fill-opacity="{opacity}" text-anchor="{anchor}"{style}>{escape(s)}</text>')
+def esc(s):
+    return escape(str(s))
 
 
-def wrap(s, width):
-    words, lines, line = s.split(), [], ""
-    for w in words:
-        if line and len(line) + 1 + len(w) > width:
-            lines.append(line)
-            line = w
-        else:
-            line = f"{line} {w}".strip()
-    return lines + [line] if line else lines
+def text(x, y, s, size=12, cls="t1", weight="normal", anchor="start", extra=""):
+    out.append(f'<text class="{cls}" x="{x:.1f}" y="{y:.1f}" font-size="{size}" font-weight="{weight}" '
+               f'text-anchor="{anchor}"{extra}>{esc(s)}</text>')
 
 
-def state_color(frac):
-    return C["done"] if frac >= 1 else C["partial"] if frac > 0 else C["todo"]
+def tw(s, size):
+    return len(s) * size * 0.58
 
 
-def tile(x, y, w, h, title, frac, big, sub=None, parts=None):
-    """A tile with a bottom-up fill. parts = [(frac, colour)] stacks several fills."""
-    global clip_id
-    clip_id += 1
-    cid = f"c{clip_id}"
-    out.append(f'<clipPath id="{cid}"><rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="6"/></clipPath>')
-    out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="6" fill="{C["tile"]}"/>')
-    level = y + h
-    for f, colour in parts or [(frac, state_color(frac))]:
-        fh = h * f
-        if fh > 0:
-            out.append(f'<rect clip-path="url(#{cid})" x="{x:.1f}" y="{level - fh:.1f}" width="{w:.1f}" height="{fh:.1f}" '
-                       f'fill="{colour}" fill-opacity="0.32"/>')
-            out.append(f'<rect clip-path="url(#{cid})" x="{x:.1f}" y="{level - fh:.1f}" width="{w:.1f}" height="2" '
-                       f'fill="{colour}"/>')
-        level -= fh
-    out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="6" fill="none" '
-               f'stroke="{C["edge"]}" stroke-width="1.5"/>')
-    size = 64 if w > T * 1.5 else 34
-    lines = wrap(title, 26 if w > T * 1.5 else 20)
-    for i, line in enumerate(lines):
-        text(x + 14, y + 26 + i * 17, line, 14 if w > T * 1.5 else 12.5, color=C["text"])
-    text(x + w - 14, y + h - (40 if sub else 16), big, size, "900", C["text"], "end", italic=True)
-    if sub:
-        for i, line in enumerate(wrap(sub, 42 if w > T * 1.5 else 26)):
-            text(x + 14, y + h - 22 + i * 13, line, 10.5, "normal", C["muted"])
+# --- squarified treemap (Bruls, Huizing, van Wijk) ---
+def squarify(values, x, y, w, h):
+    total = sum(values)
+    if total <= 0:
+        return [(x, y, 0, 0) for _ in values]
+    scale = w * h / total
+    areas = [v * scale for v in values]
+    rects, i = [], 0
+    while i < len(areas):
+        short = min(w, h)
+        row = [areas[i]]
+        j = i + 1
+
+        def worst(r):
+            s = sum(r)
+            return max(max(s * s / (short * short * a), short * short * a / (s * s)) for a in r if a > 0)
+        while j < len(areas) and worst(row + [areas[j]]) <= worst(row):
+            row.append(areas[j])
+            j += 1
+        s = sum(row)
+        if w >= h:  # column on the left
+            cw = s / h
+            yy = y
+            for a in row:
+                rects.append((x, yy, cw, a / cw))
+                yy += a / cw
+            x += cw
+            w -= cw
+        else:  # row on top
+            rh = s / w
+            xx = x
+            for a in row:
+                rects.append((xx, y, a / rh, rh))
+                xx += a / rh
+            y += rh
+            h -= rh
+        i = j
+    return rects
 
 
-phases = data["phase"]
-total_w = sum(p["weight"] for p in phases)
-overall = sum(p["weight"] * p["done"] for p in phases) / total_w
+def cell(x, y, w, h, state, label, tip, size=11, top=0.0):
+    """A treemap cell; `top` reserves room for a group chip above the label."""
+    out.append(f'<rect class="{state}" x="{x + 1:.1f}" y="{y + 1:.1f}" width="{max(w - 2, 0):.1f}" '
+               f'height="{max(h - 2, 0):.1f}"><title>{esc(tip)}</title></rect>')
+    if state == "partial":
+        out.append(f'<rect x="{x + 1:.1f}" y="{y + 1:.1f}" width="{max(w - 2, 0):.1f}" height="{max(h - 2, 0):.1f}" '
+                   f'fill="url(#hatch)" pointer-events="none"/>')
+    if label:
+        place_label(x, y + top, w, h - top, label, size)
+
+
+def place_label(x, y, w, h, label, size):
+    words = label.replace(" / ", "/ ").split(" ")
+    two = [label] if len(words) < 2 else [" ".join(words[:len(words) // 2]), " ".join(words[len(words) // 2:])]
+    cx, cy = x + w / 2, y + h / 2
+    for sz in (size, size - 1.5, size - 2.5):
+        lh = sz * 1.15
+        for lines, vertical in (([label], False), (two, False), ([label], True), (two, True)):
+            long_side = max(tw(l, sz) for l in lines) + 6
+            thick = lh * len(lines) + 4
+            fits = (long_side <= w and thick <= h) if not vertical else (long_side <= h and thick <= w)
+            if not fits:
+                continue
+            rot = f' transform="rotate(-90 {cx:.1f} {cy:.1f})"' if vertical else ""
+            for i, line in enumerate(lines):
+                yy = cy + sz * 0.36 + (i - (len(lines) - 1) / 2) * lh
+                text(cx, yy, line, sz, "cell-t", "600", "middle", rot)
+            return
+
+
+def chip(x, y, label):
+    w = tw(label, 11) + 10
+    out.append(f'<rect class="chip" x="{x + 3:.1f}" y="{y + 3:.1f}" width="{w:.1f}" height="16" rx="3"/>')
+    text(x + 8, y + 15, label, 11, "t1", "600")
+
+
+def panel(x, y, w, h, groups):
+    """groups: [(group label, [(name, value, state, tip)])]"""
+    out.append(f'<rect class="grupo" x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}"/>')
+    outer = squarify([sum(v for _, v, _, _ in items) for _, items in groups], x, y, w, h)
+    for (glabel, items), (gx, gy, gw, gh) in zip(groups, outer):
+        inner = squarify([v for _, v, _, _ in items], gx + 1, gy + 1, gw - 2, gh - 2)
+        chip_w = tw(glabel, 11) + 14
+        for (name, _, state, tip), (ix, iy, iw, ih) in zip(items, inner):
+            covered = iy <= gy + 2 and ix < gx + chip_w
+            cell(ix, iy, iw, ih, state, name, tip, top=18.0 if covered else 0.0)
+        out.append(f'<rect class="sep" x="{gx:.1f}" y="{gy:.1f}" width="{gw:.1f}" height="{gh:.1f}" fill="none" '
+                   f'stroke-width="2"/>')
+        chip(gx, gy, glabel)
+
+
+STATE_VALUE = {"done": 1.0, "partial": 0.5, "todo": 0.0}
+
+
+def level(frac):
+    return "done" if frac >= 0.999 else "partial" if frac > 0 else "todo"
+
+
+# --- data ---
 code = data["code"]
-rec = code["recompiled"] / code["functions"]
-hle = code["hle"] / code["functions"]
-dec = data["decomp"]
-dfrac = dec["functions_in_c"] / code["functions"]
+modules = data["module"]
+rows = sorted(csv.reader(open(ROOT / "p3fes_map.csv")), key=lambda r: int(r[1], 16) if r[1].startswith("0x") else -1)
+counts = {m["name"]: 0 for m in modules}
+prev = modules[0]["name"]
+for r in rows:
+    if not r[1].startswith("0x"):
+        continue
+    name = r[0]
+    group = next((m["name"] for m in modules if re.match(m["match"], name)), None)
+    if group is None:
+        group = modules[-1]["name"] if re.search(r"_[0-9a-f]{8}$", name) else prev
+    counts[group] += 1
+    prev = group
+nfun = sum(counts.values())
+exercised = sum(counts[m["name"]] * STATE_VALUE[m["state"]] for m in modules) / nfun
 
-# Header
+hw_groups = data["hardware"]
+hw_total = sum(i["weight"] for g in hw_groups for i in g["items"])
+hw = sum(i["weight"] * STATE_VALUE[i["state"]] for g in hw_groups for i in g["items"]) / hw_total
+phases = data["phase"]
+port = sum(p["weight"] * p["done"] for p in phases) / sum(p["weight"] for p in phases)
+translated = (code["recompiled"] + code["hle"]) / code["functions"]
+decomp = data["decomp"]["functions_in_c"] / code["functions"]
+
+# --- header and badges ---
 y = PAD
-out.append(f'<rect x="{PAD}" y="{y}" width="8" height="34" fill="{C["done"]}" transform="skewX(-12)"/>')
-text(PAD + 20, y + 26, "PERSONA 3 FES", 28, "900", italic=True)
-text(PAD + 262, y + 26, "NATIVE PORT PROGRESS", 15, "bold", C["done"], italic=True)
-text(W - PAD, y + 26, f"updated {data['updated']}", 11, "normal", C["muted"], "end")
-y += 50
+text(PAD, y + 20, "Status", 22, "t1", "700")
+x = W - PAD
+for label, frac, shown in reversed([("playable port", port, f"{port * 100:.0f}%"),
+                                    ("code translated", translated, f"{translated * 100:.0f}%"),
+                                    ("code exercised", exercised, f"{exercised * 100:.0f}%"),
+                                    ("hardware", hw, f"{hw * 100:.0f}%"),
+                                    ("C decomp", decomp, f"{decomp * 100:.1f}%")]):
+    kw, vw = tw(label, 11.5) + 14, tw(shown, 11.5) + 14
+    x -= kw + vw
+    out.append(f'<rect class="badge-k" x="{x:.1f}" y="{y + 5}" width="{kw + 4:.1f}" height="20" rx="3"/>')
+    out.append(f'<rect class="{level(frac)}" x="{x + kw:.1f}" y="{y + 5}" width="{vw:.1f}" height="20" rx="3"/>')
+    out.append(f'<rect class="{level(frac)}" x="{x + kw:.1f}" y="{y + 5}" width="4" height="20"/>')
+    text(x + kw / 2, y + 19, label, 11.5, "badge-t", "normal", "middle")
+    text(x + kw + vw / 2, y + 19, shown, 11.5, "cell-t", "700", "middle")
+    x -= 8
+y += 34
+out.append(f'<line class="borde" x1="{PAD}" y1="{y}" x2="{W - PAD}" y2="{y}" stroke-width="1"/>')
+y += 22
 
-# Grid: the overall tile spans 2x2, the phases and code tiles fill the rest.
-cells = [(c, r) for r in range(64) for c in range(COLS)]
-taken = {(0, 0), (1, 0), (0, 1), (1, 1)}
-tile(PAD, y, 2 * T + GAP, 2 * T + GAP, "Fully playable port (weighted estimate)", overall, f"{overall * 100:.0f}%",
-     sub=f"{sum(1 for p in phases if p['done'] >= 1)} of {len(phases)} phases complete")
-items = [(p["name"], p["done"], f'{p["done"] * 100:.0f}%', f'weight {p["weight"]}', None) for p in phases]
-items.append(("EE code translated", 1.0, "100%", f'{code["functions"]:,} functions: {rec * 100:.1f}% C++, {hle * 100:.1f}% HLE',
-              [(rec, C["done"]), (hle, C["hle"])]))
-items.append(("C decompilation (snaku)", dfrac, f"{dfrac * 100:.1f}%", f'{dec["functions_in_c"]:,} functions in C', None))
-free = [cell for cell in cells if cell not in taken]
-for (name, frac, big, sub, parts), (c, r) in zip(items, free):
-    tile(PAD + c * (T + GAP), y + r * (T + GAP), T, T, name, frac, big, sub, parts)
-rows = max(r for _, r in free[:len(items)]) + 1
-y += rows * (T + GAP) + 10
+# --- panels ---
+left_x, right_x = PAD, PAD + PANEL_W + 2 * GAP
+text(left_x, y, f"Executable: {nfun:,} functions by module, {exercised * 100:.0f}% exercised", 13, "t1", "600")
+text(right_x, y, f"PS2 hardware: {hw * 100:.0f}%", 13, "t1", "600")
+y += 8
+by_panel = {}
+for m in modules:
+    tip = f'{m["name"]}: {counts[m["name"]]:,} functions'
+    by_panel.setdefault(m["panel"], []).append((m["name"], counts[m["name"]], m["state"], tip))
+panel(left_x, y, PANEL_W, PANEL_H,
+      [("Middleware + SDK", by_panel["Middleware"]), ("Game code (ATLUS)", by_panel["Game"])])
+panel(right_x, y, PANEL_W, PANEL_H,
+      [(g["group"], [(i["name"], i["weight"], i["state"], f'{g["group"]} · {i["name"]}') for i in g["items"]])
+       for g in hw_groups])
+y += PANEL_H + 26
 
-# Components: small square chips, six per row.
-text(PAD, y + 14, "HARDWARE AND SYSTEMS", 14, "900", C["done"], italic=True)
-y += 26
-CC = 6
-cs = (W - 2 * PAD - (CC - 1) * GAP) / CC
-comps = data["component"]
-for i, comp in enumerate(comps):
-    cx = PAD + (i % CC) * (cs + GAP)
-    cy = y + (i // CC) * (cs * 0.62 + GAP)
-    col = C[comp["state"]]
-    out.append(f'<rect x="{cx:.1f}" y="{cy:.1f}" width="{cs:.1f}" height="{cs * 0.62:.1f}" rx="6" fill="{col}" '
-               f'fill-opacity="{0.22 if comp["state"] != "todo" else 0.12}" stroke="{col}" stroke-width="1.5"/>')
-    out.append(f'<rect x="{cx + 10:.1f}" y="{cy + 10:.1f}" width="9" height="9" fill="{col}" transform="rotate(45 {cx + 14.5:.1f} {cy + 14.5:.1f})"/>')
-    for j, line in enumerate(wrap(comp["name"], 15)):
-        text(cx + 10, cy + 40 + j * 15, line, 12, "bold")
-y += ((len(comps) + CC - 1) // CC) * (cs * 0.62 + GAP) + 14
+# --- road to playable ---
+text(PAD, y, f"Road to a playable port: {port * 100:.0f}%", 13, "t1", "600")
+y += 8
+total_w = sum(p["weight"] for p in phases)
+x = PAD
+for p in phases:
+    w = (W - 2 * PAD) * p["weight"] / total_w
+    st = level(p["done"])
+    cell(x, y, w, 26, st, p["name"], f'{p["name"]}: {p["done"] * 100:.0f}%', 10.5)
+    x += w
+y += 26 + 22
 
-lx = PAD
-for state, label in (("done", "working"), ("partial", "partial"), ("todo", "not yet")):
-    out.append(f'<rect x="{lx}" y="{y - 9}" width="10" height="10" fill="{C[state]}" transform="rotate(45 {lx + 5} {y - 4})"/>')
-    text(lx + 18, y, label, 11, "normal", C["muted"])
-    lx += 96
-y += PAD - 4
+# --- legend ---
+x = PAD
+for state, label in (("done", "Working"), ("partial", "Partial"), ("todo", "Pending")):
+    out.append(f'<rect class="{state}" x="{x}" y="{y - 10}" width="12" height="12"/>')
+    if state == "partial":
+        out.append(f'<rect x="{x}" y="{y - 10}" width="12" height="12" fill="url(#hatch)"/>')
+    text(x + 18, y, label, 12, "t2")
+    x += 96
+text(W - PAD, y, "Module sizes from p3fes_map.csv (names: snaku decompilation). Hardware weighted per component.",
+     10.5, "t2", "normal", "end")
+H = int(y + PAD)
 
-H = int(y)
-svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" font-family="{FONT}">'
-       f'<defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{C["bg"]}"/>'
-       f'<stop offset="1" stop-color="{C["bg2"]}"/></linearGradient></defs>'
-       f'<rect width="{W}" height="{H}" rx="12" fill="url(#bg)"/>'
-       f'<circle cx="{W - 70}" cy="70" r="120" fill="{C["done"]}" fill-opacity="0.05"/>'
-       + "".join(out) + "</svg>\n")
+css = """
+  .fondo { fill: #ffffff; } .borde { stroke: #d0d7de; } .sep { stroke: #ffffff; }
+  .t1 { fill: #1f2328; } .t2 { fill: #59636e; } .cell-t { fill: #ffffff; }
+  .done { fill: #17a35b; } .partial { fill: #1b8cff; } .todo { fill: #d01f3c; }
+  .hatch-line { stroke: #0b4fa3; }
+  .chip { fill: #ffffff; fill-opacity: .88; } .badge-k { fill: #3d4a63; } .badge-t { fill: #ffffff; }
+  .grupo { fill: #ffffff; }
+  @media (prefers-color-scheme: dark) {
+    .fondo { fill: #0d1117; } .borde { stroke: #30363d; } .sep { stroke: #0d1117; }
+    .t1 { fill: #e6edf3; } .t2 { fill: #9198a1; }
+    .chip { fill: #0d1117; fill-opacity: .82; } .grupo { fill: #0d1117; }
+  }
+"""
+svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
+       f'font-family="-apple-system,BlinkMacSystemFont,\'Segoe UI\',Helvetica,Arial,sans-serif" role="img" '
+       f'aria-labelledby="st"><title id="st">Status: playable port {port * 100:.0f}%, code exercised '
+       f'{exercised * 100:.0f}%, hardware {hw * 100:.0f}%</title><style>{css}</style>'
+       f'<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">'
+       f'<line class="hatch-line" x1="0" y1="0" x2="0" y2="6" stroke-width="1.6" stroke-opacity=".6"/></pattern></defs>'
+       f'<rect class="fondo" width="{W}" height="{H}" rx="6"/>' + "".join(out) + "</svg>\n")
 (ROOT / "status" / "progress.svg").write_text(svg)
-print(f"overall {overall * 100:.1f}% -> {ROOT / 'status' / 'progress.svg'}")
+print(f"port {port * 100:.1f}%  exercised {exercised * 100:.1f}%  hardware {hw * 100:.1f}%  "
+      f"modules {counts} -> {ROOT / 'status' / 'progress.svg'}")

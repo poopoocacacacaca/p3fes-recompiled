@@ -1,5 +1,7 @@
 # Port status, rendered into progress.svg by p3fes/scripts/status_chart.py.
 # Edit this file, then run:  python3 p3fes/scripts/status_chart.py
+#
+# States: "done" (working), "partial" (works with gaps, or unverified), "todo" (not reached / not emulated).
 
 updated = "2026-10-14"
 
@@ -14,88 +16,157 @@ hle = 205              # bound to runtime implementations (kernel, SIF, CD, pad,
 functions_in_c = 986   # C function definitions in its src/ at 59d284e (2026-09-04)
 commit = "59d284e"
 
-# Weighted phases toward a fully playable port. `done` is 0.0-1.0; weights are effort estimates.
+# ---------------------------------------------------------------------------------------------------------------
+# Panel 1: the executable's 14,628 functions (p3fes/p3fes_map.csv), grouped by the library or game module they
+# belong to (names from the snaku decompilation). The first `match` regex that fits a name wins; named functions
+# that match nothing join the group of the function before them (the linker keeps each library contiguous), and
+# unnamed ones fall into the last group. The state says whether the port has exercised that code at run time.
+# ---------------------------------------------------------------------------------------------------------------
+[[module]]
+panel = "Middleware"
+name = "Sony SDK"
+match = '^(i?sce|lib(kernl|gcc|c|m|mc2|pad|dbc|cdvd|graph|ipu|mpeg|sk|iberty|https)_|_start|_exit|_root)'
+state = "done"
+[[module]]
+panel = "Middleware"
+name = "CRI ADX"
+match = '^(libadxe|adx|ADX|AHX|ahx|AIX|ACS|SJ|sj|cvFs|dvCi|htCi|mfCi)'
+state = "done"
+[[module]]
+panel = "Middleware"
+name = "CRI Sofdec"
+match = '^(libmwsfde|mw|MW|SF|sf|MPV|mpv|MPS|mps|viBuf)'
+state = "done"
+[[module]]
+panel = "Middleware"
+name = "CRI ROFS"
+match = '^(librofs|ROFS|RF|rf|cvmh|CVMH|dcf|ROCI)'
+state = "done"
+[[module]]
+panel = "Middleware"
+name = "RenderWare"
+match = '^(librw|librp|librt|Rw|Rp|Rt|rw)'
+state = "partial"
+[[module]]
+panel = "Game"
+name = "Engine core"
+match = '^(H_|h_|kwln|main$|initAndLoop|gc_|gm)'
+state = "partial"
+[[module]]
+panel = "Game"
+name = "Battle"
+match = '^(btl|battle|b[a-z]{1,4}_)'
+state = "todo"
+[[module]]
+panel = "Game"
+name = "Facilities"
+match = '^fcl'
+state = "todo"
+[[module]]
+panel = "Game"
+name = "Models / FX"
+match = '^(mdl|eff|prim)'
+state = "todo"
+[[module]]
+panel = "Game"
+name = "Scripts / events"
+match = '^(scr|mt_|MT|nm[A-Z])'
+state = "todo"
+[[module]]
+panel = "Game"
+name = "Calendar / data"
+match = '^(dat|clnd)'
+state = "todo"
+[[module]]
+panel = "Game"
+name = "UI / text"
+match = '^(itf|fr[A-Z]|fm[A-Z])'
+state = "todo"
+[[module]]
+panel = "Game"
+name = "Social"
+match = '^(comu|Comu)'
+state = "todo"
+[[module]]
+panel = "Game"
+name = "Other game code"
+match = '$^'
+state = "todo"
+
+# ---------------------------------------------------------------------------------------------------------------
+# Panel 2: PS2 hardware and system software, weighted per component.
+# ---------------------------------------------------------------------------------------------------------------
+[[hardware]]
+group = "EE"
+items = [
+  { name = "R5900", weight = 6, state = "done" },
+  { name = "Kernel", weight = 4, state = "done" },
+  { name = "FPU/MMI", weight = 3, state = "done" },
+  { name = "DMAC", weight = 3, state = "done" },
+  { name = "INTC", weight = 2, state = "done" },
+  { name = "Timers", weight = 1.5, state = "done" },
+]
+[[hardware]]
+group = "IOP"
+items = [
+  { name = "R3000A", weight = 3, state = "done" },
+  { name = "IRX", weight = 2.5, state = "done" },
+  { name = "SIF", weight = 2, state = "done" },
+  { name = "CDVD", weight = 2, state = "done" },
+  { name = "SPU2", weight = 3, state = "partial" },
+  { name = "Pad", weight = 1.5, state = "done" },
+  { name = "MC", weight = 1.5, state = "done" },
+]
+[[hardware]]
+group = "GS / VU"
+items = [
+  { name = "GS", weight = 5, state = "partial" },
+  { name = "VIF1/VU1", weight = 4, state = "todo" },
+  { name = "IPU", weight = 2.5, state = "done" },
+  { name = "GIF", weight = 2, state = "done" },
+  { name = "Tex/CLUT", weight = 1.5, state = "partial" },
+]
+
+# ---------------------------------------------------------------------------------------------------------------
+# Road to a fully playable port: weighted phases (`done` 0.0-1.0; weights are effort estimates).
+# ---------------------------------------------------------------------------------------------------------------
 [[phase]]
-name = "Recompile the EE code"
+name = "Recompile"
 weight = 10
 done = 1.0
-
 [[phase]]
-name = "Boot: kernel, IOP modules, discs"
+name = "Boot"
 weight = 10
 done = 1.0
-
 [[phase]]
-name = "Memory card and controller"
+name = "Card + pad"
 weight = 5
 done = 1.0
-
 [[phase]]
-name = "Movies (video, audio, speed)"
+name = "Movies"
 weight = 10
 done = 0.7
-
 [[phase]]
-name = "Renderer (PCSX2 GS, speed)"
+name = "Renderer"
 weight = 15
 done = 0.2
-
 [[phase]]
-name = "Title screen and menus"
+name = "Title"
 weight = 10
 done = 0.0
-
 [[phase]]
-name = "Field and Tartarus 3D"
+name = "Field / Tartarus"
 weight = 15
 done = 0.0
-
 [[phase]]
 name = "Battles"
 weight = 10
 done = 0.0
-
 [[phase]]
-name = "Story, events, social links"
+name = "Story"
 weight = 10
 done = 0.0
-
 [[phase]]
-name = "Full playthrough testing"
+name = "Playthrough"
 weight = 5
 done = 0.0
-
-# Hardware and system components: state = "done" | "partial" | "todo"
-[[component]]
-name = "EE kernel (HLE)"
-state = "done"
-[[component]]
-name = "DMAC"
-state = "done"
-[[component]]
-name = "IPU (MPEG)"
-state = "done"
-[[component]]
-name = "IOP + IRX modules"
-state = "done"
-[[component]]
-name = "SPU2 + ADMA"
-state = "partial"
-[[component]]
-name = "SIO2 memory card"
-state = "done"
-[[component]]
-name = "Controller"
-state = "done"
-[[component]]
-name = "CD/DVD (CVM)"
-state = "done"
-[[component]]
-name = "GS renderer"
-state = "partial"
-[[component]]
-name = "VIF1 / VU1"
-state = "todo"
-[[component]]
-name = "Widescreen / 60 FPS"
-state = "todo"
