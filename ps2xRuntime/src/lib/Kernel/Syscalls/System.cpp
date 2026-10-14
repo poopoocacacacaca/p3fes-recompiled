@@ -531,6 +531,19 @@ namespace ps2_syscalls
         }
 
         scheduler.setupCurrentThread(initialStack, stackSize, getRegU32(ctx, 28));
+
+        // GOW-Port: reservar la pila del hilo principal para que las pilas de interrupciones (que se toman
+        // desde lo alto de la RAM) no la pisen. Sin esto, cada interrupcion machacaba los marcos mas
+        // antiguos del hilo principal y este acababa saltando a basura (God of War: pc=0xF82).
+        if (runtime)
+        {
+            const uint32_t reserved = std::max<uint32_t>(stackSize, 0x10000u);
+            const uint32_t low = std::min(sp, initialStack != 0u ? initialStack : sp);
+            if (low > reserved)
+            {
+                runtime->limitAsyncCallbackStackTop(low - reserved);
+            }
+        }
         setReturnU32(ctx, sp);
     }
 
@@ -571,7 +584,7 @@ namespace ps2_syscalls
                           << std::dec << std::endl;
             });
 
-            setReturnU32(ctx, runtime->guestHeapBase());
+            setReturnU32(ctx, heapBase); // GOW-Port: el juego recibe su propio heap
             return;
         }
 

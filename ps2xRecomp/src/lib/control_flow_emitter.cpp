@@ -406,6 +406,7 @@ namespace ps2recomp
         case OPCODE_BNE:
         case OPCODE_BNEL:
             return fmt::format("GPR_U64(ctx, {}) != GPR_U64(ctx, {})", rsReg, rtReg);
+        // GOW-Port: en el R5900 BLEZ/BGTZ/BLTZ/BGEZ comparan el registro de 64 bits (fork de SotC, 3c46932).
         case OPCODE_BLEZ:
         case OPCODE_BLEZL:
             return fmt::format("GPR_S64(ctx, {}) <= 0", rsReg);

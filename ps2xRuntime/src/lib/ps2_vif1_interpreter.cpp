@@ -1,6 +1,13 @@
 // Based on Blackline Interactive implementation
+#if defined(_MSC_VER) || defined(__SSE4_1__)
+#include <immintrin.h>
+#endif
 #include "runtime/ps2_memory.h"
 #include <cstring>
+#include <vector>
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 
 enum VIFCmd : uint8_t
 {
@@ -25,61 +32,6 @@ enum VIFCmd : uint8_t
     VIF_DIRECT = 0x50,
     VIF_DIRECTHL = 0x51,
 };
-
-namespace
-{
-    constexpr uint8_t kGifFmtImage = 2u;
-
-    uint32_t pendingGifImageQwc(const uint8_t *data, uint32_t sizeBytes)
-    {
-        if (!data || sizeBytes < 16u)
-            return 0u;
-
-        uint32_t offset = 0u;
-        while (offset + 16u <= sizeBytes)
-        {
-            uint64_t tagLo = 0u;
-            std::memcpy(&tagLo, data + offset, sizeof(tagLo));
-            offset += 16u;
-
-            const uint32_t nloop = static_cast<uint32_t>(tagLo & 0x7FFFu);
-            const uint8_t flg = static_cast<uint8_t>((tagLo >> 58) & 0x3u);
-            uint32_t nreg = static_cast<uint32_t>((tagLo >> 60) & 0xFu);
-            if (nreg == 0u)
-                nreg = 16u;
-
-            uint64_t payloadBytes = 0u;
-            if (flg == 0u) // PACKED
-            {
-                payloadBytes = static_cast<uint64_t>(nloop) * nreg * 16ull;
-            }
-            else if (flg == 1u) // REGLIST, padded to a quadword
-            {
-                payloadBytes = static_cast<uint64_t>(nloop) * nreg * 8ull;
-                payloadBytes = (payloadBytes + 15ull) & ~15ull;
-            }
-            else if (flg == kGifFmtImage)
-            {
-                payloadBytes = static_cast<uint64_t>(nloop) * 16ull;
-                const uint64_t availableBytes = sizeBytes - offset;
-                if (payloadBytes > availableBytes)
-                {
-                    return static_cast<uint32_t>((payloadBytes - availableBytes) / 16ull);
-                }
-            }
-            else
-            {
-                return 0u;
-            }
-
-            if (payloadBytes > static_cast<uint64_t>(sizeBytes - offset))
-                return 0u;
-            offset += static_cast<uint32_t>(payloadBytes);
-        }
-
-        return 0u;
-    }
-}
 
 void PS2Memory::processVIF0Data(uint32_t srcPhys, uint32_t sizeBytes)
 {
@@ -295,41 +247,50 @@ void PS2Memory::processVIF1Data(uint32_t srcPhys, uint32_t sizeBytes)
     processVIF1Data(m_rdram + srcPhys, sizeBytes);
 }
 
+// GOW-Port: enviar los bytes originales; el cursor GIF por PATH conserva PACKED/REGLIST/IMAGE.
+// No anteponer otra etiqueta IMAGE a un payload que ya continua una etiqueta abierta.
+void PS2Memory::submitVif1DirectPayload(const uint8_t *data, uint32_t sizeBytes, bool directHl)
+{
+    submitGifPacket(GifPathId::Path2, data, sizeBytes, true, directHl);
+}
+
 void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 {
     if (sizeBytes == 0u)
         return;
 
     uint32_t pos = 0;
+    static const bool traceVif = std::getenv("GOW_VIF_DIAG") != nullptr;
 
-    while (pos + 4 <= sizeBytes)
+    while (pos < sizeBytes)
     {
-        if (m_vif1PendingPath2ImageQwc != 0u)
+        // GOW-Port: el tamaño del comando persiste entre bloques DMA y escrituras FIFO.
+        // Solo se acumulan payloads truncados; un DIRECT completo no necesita esta copia.
+        if (m_vif1DirectBytesRemaining != 0u)
         {
-            const uint32_t availableQw = (sizeBytes - pos) / 16u;
-            if (availableQw == 0u)
-            {
+            const uint32_t chunk = std::min<uint32_t>(m_vif1DirectBytesRemaining, sizeBytes - pos);
+            m_vif1DirectPayload.insert(m_vif1DirectPayload.end(), data + pos, data + pos + chunk);
+            pos += chunk;
+            m_vif1DirectBytesRemaining -= chunk;
+            if (m_vif1DirectBytesRemaining != 0u)
                 break;
-            }
-
-            const uint32_t chunkQw = std::min<uint32_t>(m_vif1PendingPath2ImageQwc, availableQw);
-            std::vector<uint8_t> imagePacket(16u + static_cast<size_t>(chunkQw) * 16u, 0u);
-            const uint64_t imageTag =
-                static_cast<uint64_t>(chunkQw & 0x7FFFu) |
-                ((m_vif1PendingPath2ImageQwc == chunkQw) ? (1ull << 15) : 0ull) |
-                (static_cast<uint64_t>(kGifFmtImage) << 58);
-            std::memcpy(imagePacket.data(), &imageTag, sizeof(imageTag));
-            std::memcpy(imagePacket.data() + 16u, data + pos, static_cast<size_t>(chunkQw) * 16u);
-            submitGifPacket(GifPathId::Path2, imagePacket.data(), static_cast<uint32_t>(imagePacket.size()), true, m_vif1PendingPath2DirectHl);
-
-            pos += chunkQw * 16u;
-            m_vif1PendingPath2ImageQwc -= chunkQw;
-            if (m_vif1PendingPath2ImageQwc == 0u)
+            if (traceVif)
             {
-                m_vif1PendingPath2DirectHl = false;
+                static unsigned completed = 0u;
+                if (++completed <= 16u)
+                    std::fprintf(stderr, "[gow-vif-direct] completed=%u bytes=%u hl=%u\n", completed,
+                                 static_cast<uint32_t>(m_vif1DirectPayload.size()), m_vif1DirectHl ? 1u : 0u);
             }
+            submitVif1DirectPayload(m_vif1DirectPayload.data(), static_cast<uint32_t>(m_vif1DirectPayload.size()), m_vif1DirectHl);
+            m_vif1DirectPayload.clear();
+            m_vif1DirectHl = false;
             continue;
         }
+        if (sizeBytes - pos < 4u)
+            break;
+        // GOW-Port: adaptado de Claude, god-of-war-recomp 540defd. Una IMAGE pendiente de PATH2
+        // solo continua con la carga del siguiente DIRECT/DIRECTHL.
+        // Antes se tomaban como pixeles los codigos VIF que siguen al DIRECT y el flujo se desincronizaba.
 
         uint32_t cmd;
         memcpy(&cmd, data + pos, 4);
@@ -341,6 +302,16 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         const bool irq = (cmd & 0x80000000u) != 0u;
 
         // Track most-recent command for VIFn_CODE emulation.
+        if (traceVif)
+        {
+            static uint64_t commands = 0u, irqCommands = 0u;
+            ++commands;
+            if (irq) ++irqCommands;
+            if (commands == 1u || (commands % 4096u) == 0u || (irq && irqCommands <= 32u))
+                std::fprintf(stderr, "[gow-vif] commands=%llu irq=%llu code=0x%08X offset=0x%X bytes=%u tops=%u\n",
+                             static_cast<unsigned long long>(commands), static_cast<unsigned long long>(irqCommands),
+                             cmd, pos - 4u, sizeBytes, vif1_regs.tops);
+        }
         vif1_regs.code = cmd;
         vif1_regs.num = num;
         if (irq)
@@ -406,6 +377,19 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
             const uint32_t runTop = vif1_regs.tops & 0x3FFu;
             const uint32_t runItop = vif1_regs.itops & 0x3FFu;
+            if (traceVif)
+            {
+                static unsigned launches = 0u;
+                if (++launches <= 24u && m_vu1Data)
+                {
+                    uint64_t lo = 0u, hi = 0u;
+                    std::memcpy(&lo, m_vu1Data + runItop * 16u, 8u);
+                    std::memcpy(&hi, m_vu1Data + runItop * 16u + 8u, 8u);
+                    std::fprintf(stderr, "[gow-vif-launch] launch=%u pc=0x%X top=%u itop=%u input=%016llX:%016llX offset=0x%X\n",
+                                 launches, startPC, runTop, runItop,
+                                 static_cast<unsigned long long>(hi), static_cast<unsigned long long>(lo), pos - 4u);
+                }
+            }
             vif1_regs.top = runTop;
             vif1_regs.itop = runItop;
 
@@ -487,32 +471,31 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         }
         else if (opcode == VIF_DIRECT || opcode == VIF_DIRECTHL)
         {
-            uint32_t qwCount = imm;
-            if (qwCount == 0)
-                qwCount = 65536;
-            const uint32_t availableQw = (sizeBytes - pos) / 16u;
-            const bool truncated = qwCount > availableQw;
-            if (qwCount > availableQw)
-                qwCount = availableQw;
-
-            if (qwCount > 0)
+            // GOW-Port: IMMEDIATE=0 significa 65536 QW, nunca más de 1 MiB.
+            const uint32_t payloadBytes = ((imm == 0u) ? 65536u : static_cast<uint32_t>(imm)) * 16u;
+            const uint32_t availableBytes = sizeBytes - pos;
+            const bool directHl = (opcode == VIF_DIRECTHL);
+            if (payloadBytes <= availableBytes)
             {
-                const bool directHl = (opcode == VIF_DIRECTHL);
-                submitGifPacket(GifPathId::Path2, data + pos, qwCount * 16, true, directHl);
-
-                const uint32_t pendingImageQw = pendingGifImageQwc(data + pos, qwCount * 16u);
-                if (pendingImageQw != 0u)
-                {
-                    m_vif1PendingPath2ImageQwc = pendingImageQw;
-                    m_vif1PendingPath2DirectHl = directHl;
-                }
+                submitVif1DirectPayload(data + pos, payloadBytes, directHl);
+                pos += payloadBytes;
             }
-
-            pos += qwCount * 16;
-            if (truncated)
+            else
             {
+                // GOW-Port: sonda opcional acotada para comprobar cortes reales en el juego.
+                if (traceVif)
+                {
+                    static unsigned fragments = 0u;
+                    if (++fragments <= 16u)
+                        std::fprintf(stderr, "[gow-vif-direct] fragmented=%u code=0x%08X bytes=%u available=%u\n",
+                                     fragments, cmd, payloadBytes, availableBytes);
+                }
+                m_vif1DirectPayload.clear();
+                m_vif1DirectPayload.reserve(payloadBytes);
+                m_vif1DirectPayload.insert(m_vif1DirectPayload.end(), data + pos, data + sizeBytes);
+                m_vif1DirectBytesRemaining = payloadBytes - availableBytes;
+                m_vif1DirectHl = directHl;
                 pos = sizeBytes;
-                break;
             }
             continue;
         }
@@ -572,7 +555,203 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
             const bool zeroExtend = (imm & 0x4000u) != 0u;
 
-            if (m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
+            // GOW-Port: UNPACK sin máscara, sin sumar la fila (STMOD 0/3) y con CL >= WL (cada escritura tiene su
+            // vector de origen): el bucle general de abajo lee el qword de destino, sustituye las componentes
+            // descomprimidas y lo escribe entero. Aquí se hace lo mismo por formato, sin las comprobaciones por
+            // componente. V3 conserva W de la memoria, V2 escribe XYXY y V1 repite X, como abajo.
+            const uint32_t fastMode = vif1_regs.mode & 3u;
+            const bool fastFormat = vl != 3u || vn == 3u;
+            const bool fastUnpack = !maskEnable && cl >= wl && fastFormat &&
+                                    ((vl == 3u && vn == 3u) || (fastMode != 1u && fastMode != 2u));
+            if (fastUnpack && m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
+            {
+                const uint8_t *srcBase = data + pos;
+                // GOW-Port: un bucle por formato (el formato no cambia dentro del UNPACK); mismo resultado que el
+                // bucle general por componente de antes: V4 escribe XYZW, V3 conserva W de la memoria, V2 escribe
+                // XYXY, V1 repite X y V4-5 expande RGBA5551.
+                const auto unpackAll = [&](auto fill)
+                {
+                    for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
+                    {
+                        const uint32_t destVec = (cl == wl) ? ((vuAddr + writeIndex) & 0x3FFu)
+                                                            : ((vuAddr + (writeIndex / wl) * cl + writeIndex % wl) & 0x3FFu);
+                        uint8_t *dst = m_vu1Data + destVec * 16u;
+                        fill(dst, srcBase + writeIndex * bytesPerVector);
+                    }
+                };
+                const auto sext16 = [](const uint8_t *src) -> uint32_t
+                {
+                    int16_t v;
+                    std::memcpy(&v, src, 2u);
+                    return static_cast<uint32_t>(static_cast<int32_t>(v));
+                };
+                const auto zext16 = [](const uint8_t *src) -> uint32_t
+                {
+                    uint16_t v;
+                    std::memcpy(&v, src, 2u);
+                    return v;
+                };
+                const auto ext8 = [zeroExtend](uint8_t v) -> uint32_t
+                {
+                    return zeroExtend ? static_cast<uint32_t>(v) : static_cast<uint32_t>(static_cast<int32_t>(static_cast<int8_t>(v)));
+                };
+                const auto store4 = [](uint8_t *dst, uint32_t x, uint32_t y, uint32_t z, uint32_t w)
+                {
+                    const uint32_t out[4] = {x, y, z, w};
+                    std::memcpy(dst, out, sizeof(out));
+                };
+                const auto store3 = [](uint8_t *dst, uint32_t x, uint32_t y, uint32_t z)
+                {
+                    const uint32_t out[3] = {x, y, z};
+                    std::memcpy(dst, out, sizeof(out)); // W se conserva
+                };
+                const uint32_t limit = static_cast<uint32_t>(components);
+                if (vl == 3u) // V4-5
+                {
+                    unpackAll([&](uint8_t *dst, const uint8_t *src)
+                              {
+                                  uint16_t packed = 0;
+                                  std::memcpy(&packed, src, sizeof(packed));
+                                  store4(dst, (packed & 0x001Fu) << 3u, (packed & 0x03E0u) >> 2u,
+                                         (packed & 0x7C00u) >> 7u, (packed & 0x8000u) >> 8u); });
+                }
+                else if (vl == 0u) // 32 bits
+                {
+                    if (limit == 4u)
+                        unpackAll([](uint8_t *dst, const uint8_t *src) { std::memcpy(dst, src, 16u); });
+                    else if (limit == 3u)
+                        unpackAll([](uint8_t *dst, const uint8_t *src) { std::memcpy(dst, src, 12u); });
+                    else if (limit == 2u)
+                        unpackAll([](uint8_t *dst, const uint8_t *src)
+                                  {
+                                      std::memcpy(dst, src, 8u);
+                                      std::memcpy(dst + 8u, src, 8u); });
+                    else
+                        unpackAll([&](uint8_t *dst, const uint8_t *src)
+                                  {
+                                      uint32_t x;
+                                      std::memcpy(&x, src, 4u);
+                                      store4(dst, x, x, x, x); });
+                }
+                else if (vl == 1u) // 16 bits
+                {
+                    if (zeroExtend)
+                    {
+                        if (limit == 4u)
+                            unpackAll([&](uint8_t *dst, const uint8_t *src) { store4(dst, zext16(src), zext16(src + 2), zext16(src + 4), zext16(src + 6)); });
+                        else if (limit == 3u)
+                            unpackAll([&](uint8_t *dst, const uint8_t *src) { store3(dst, zext16(src), zext16(src + 2), zext16(src + 4)); });
+                        else if (limit == 2u)
+                            unpackAll([&](uint8_t *dst, const uint8_t *src) { const uint32_t x = zext16(src), y = zext16(src + 2); store4(dst, x, y, x, y); });
+                        else
+                            unpackAll([&](uint8_t *dst, const uint8_t *src) { const uint32_t x = zext16(src); store4(dst, x, x, x, x); });
+                    }
+                    else
+                    {
+                        if (limit == 4u)
+                            unpackAll([&](uint8_t *dst, const uint8_t *src) { store4(dst, sext16(src), sext16(src + 2), sext16(src + 4), sext16(src + 6)); });
+                        else if (limit == 3u)
+                            unpackAll([&](uint8_t *dst, const uint8_t *src) { store3(dst, sext16(src), sext16(src + 2), sext16(src + 4)); });
+                        else if (limit == 2u)
+                            unpackAll([&](uint8_t *dst, const uint8_t *src) { const uint32_t x = sext16(src), y = sext16(src + 2); store4(dst, x, y, x, y); });
+                        else
+                            unpackAll([&](uint8_t *dst, const uint8_t *src) { const uint32_t x = sext16(src); store4(dst, x, x, x, x); });
+                    }
+                }
+                else // 8 bits
+                {
+                    if (limit == 4u)
+                        unpackAll([&](uint8_t *dst, const uint8_t *src) { store4(dst, ext8(src[0]), ext8(src[1]), ext8(src[2]), ext8(src[3])); });
+                    else if (limit == 3u)
+                        unpackAll([&](uint8_t *dst, const uint8_t *src) { store3(dst, ext8(src[0]), ext8(src[1]), ext8(src[2])); });
+                    else if (limit == 2u)
+                        unpackAll([&](uint8_t *dst, const uint8_t *src) { const uint32_t x = ext8(src[0]), y = ext8(src[1]); store4(dst, x, y, x, y); });
+                    else
+                        unpackAll([&](uint8_t *dst, const uint8_t *src) { const uint32_t x = ext8(src[0]); store4(dst, x, x, x, x); });
+                }
+            }
+#if defined(_MSC_VER) || defined(__SSE4_1__)
+            // GOW-Port: UNPACK con máscara o sumando la fila (STMOD 1/2) y CL >= WL: lo mismo que el bucle general
+            // por componente de abajo, con SSE. Cada escritura descomprime su vector (las componentes que faltan,
+            // de la memoria; V2 escribe XYXY y V1 repite X), suma ROW a los campos que toman el dato (no en V4-5),
+            // actualiza ROW en STMOD 2 solo en esos campos y mezcla dato, ROW, COL o memoria según la máscara de
+            // su posición en el ciclo (como mucho la 3).
+            else if (cl >= wl && fastFormat && m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
+            {
+                const uint8_t *srcBase = data + pos;
+                const uint32_t mode = vif1_regs.mode & 3u;
+                const bool canAdd = (vl != 3u || vn != 3u);
+                const bool addRow = canAdd && (mode == 1u || mode == 2u);
+                const uint32_t limit = static_cast<uint32_t>(components);
+                __m128i specMask[4][4]; // [posición en el ciclo][especificación 0..3]
+                __m128i colv[4];
+                for (uint32_t cyc = 0; cyc < 4u; ++cyc)
+                {
+                    alignas(16) int32_t m[4][4] = {};
+                    for (uint32_t field = 0; field < 4u; ++field)
+                    {
+                        const uint32_t spec = maskEnable ? (vif1_regs.mask >> (((cyc * 4u) + field) * 2u)) & 0x3u : 0u;
+                        m[spec][field] = -1;
+                    }
+                    for (uint32_t spec = 0; spec < 4u; ++spec)
+                        specMask[cyc][spec] = _mm_load_si128(reinterpret_cast<const __m128i *>(m[spec]));
+                    colv[cyc] = _mm_set1_epi32(static_cast<int32_t>(vif1_regs.col[cyc]));
+                }
+                const auto decode = [&](const uint8_t *src, __m128i mem) -> __m128i
+                {
+                    __m128i v;
+                    if (vl == 3u) // V4-5
+                    {
+                        uint16_t packed = 0;
+                        std::memcpy(&packed, src, sizeof(packed));
+                        return _mm_setr_epi32(static_cast<int32_t>((packed & 0x001Fu) << 3u), static_cast<int32_t>((packed & 0x03E0u) >> 2u),
+                                              static_cast<int32_t>((packed & 0x7C00u) >> 7u), static_cast<int32_t>((packed & 0x8000u) >> 8u));
+                    }
+                    const uint32_t bytes = limit * (vl == 0u ? 4u : vl == 1u ? 2u : 1u);
+                    alignas(16) uint8_t raw[16] = {};
+                    std::memcpy(raw, src, bytes);
+                    if (vl == 0u)
+                        v = _mm_load_si128(reinterpret_cast<const __m128i *>(raw));
+                    else if (vl == 1u)
+                        v = zeroExtend ? _mm_cvtepu16_epi32(_mm_load_si128(reinterpret_cast<const __m128i *>(raw)))
+                                       : _mm_cvtepi16_epi32(_mm_load_si128(reinterpret_cast<const __m128i *>(raw)));
+                    else
+                        v = zeroExtend ? _mm_cvtepu8_epi32(_mm_load_si128(reinterpret_cast<const __m128i *>(raw)))
+                                       : _mm_cvtepi8_epi32(_mm_load_si128(reinterpret_cast<const __m128i *>(raw)));
+                    if (limit == 1u)
+                        return _mm_shuffle_epi32(v, _MM_SHUFFLE(0, 0, 0, 0));
+                    if (limit == 2u)
+                        return _mm_shuffle_epi32(v, _MM_SHUFFLE(1, 0, 1, 0));
+                    if (limit == 3u)
+                        return _mm_blend_epi16(v, mem, 0xC0); // W de la memoria
+                    return v;
+                };
+                __m128i rowv = _mm_loadu_si128(reinterpret_cast<const __m128i *>(vif1_regs.row));
+                for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
+                {
+                    const uint32_t cyclePos = writeIndex % wl;
+                    const uint32_t destVec = (vuAddr + (writeIndex / wl) * cl + cyclePos) & 0x3FFu;
+                    uint8_t *dst = m_vu1Data + destVec * 16u;
+                    const uint32_t cyc = cyclePos > 3u ? 3u : cyclePos;
+                    const __m128i mem = _mm_loadu_si128(reinterpret_cast<const __m128i *>(dst));
+                    __m128i dec = decode(srcBase + writeIndex * bytesPerVector, mem);
+                    const __m128i rowOld = rowv;
+                    if (addRow)
+                    {
+                        dec = _mm_add_epi32(dec, rowv);
+                        if (mode == 2u)
+                            rowv = _mm_blendv_epi8(rowv, dec, specMask[cyc][0]);
+                    }
+                    const __m128i out = _mm_or_si128(
+                        _mm_or_si128(_mm_and_si128(dec, specMask[cyc][0]), _mm_and_si128(rowOld, specMask[cyc][1])),
+                        _mm_or_si128(_mm_and_si128(colv[cyc], specMask[cyc][2]), _mm_and_si128(mem, specMask[cyc][3])));
+                    _mm_storeu_si128(reinterpret_cast<__m128i *>(dst), out);
+                }
+                if (addRow && mode == 2u)
+                    _mm_storeu_si128(reinterpret_cast<__m128i *>(vif1_regs.row), rowv);
+            }
+#endif
+            else if (m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
             {
                 const uint8_t *srcBase = data + pos;
                 uint32_t srcIndex = 0u;
@@ -697,17 +876,24 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                     }
                     else if (vl == 3u && vn == 3u)
                     {
-                        // V4-5: packed color-like format in a single 16-bit value.
+                        // V4-5 expands RGB to bits 3..7 and alpha to bit 7.
                         uint16_t packed = 0;
                         std::memcpy(&packed, srcVec, sizeof(packed));
-                        decompressed[0] = packed & 0x1Fu;
-                        decompressed[1] = (packed >> 5) & 0x1Fu;
-                        decompressed[2] = (packed >> 10) & 0x1Fu;
-                        decompressed[3] = (packed >> 15) & 0x01u;
+                        decompressed[0] = (packed & 0x001Fu) << 3u;
+                        decompressed[1] = (packed & 0x03E0u) >> 2u;
+                        decompressed[2] = (packed & 0x7C00u) >> 7u;
+                        decompressed[3] = (packed & 0x8000u) >> 8u;
                     }
                     else
                     {
                         handledFormat = false;
+                    }
+
+                    // V2 writes XYXY on hardware, before masks and STMOD apply.
+                    if (handledFormat && components == 2)
+                    {
+                        decompressed[2] = decompressed[0];
+                        decompressed[3] = decompressed[1];
                     }
 
                     // Unknown compressed format fallback: preserve legacy raw-copy behavior.
@@ -722,6 +908,14 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                     const uint32_t mode = vif1_regs.mode & 3u;
                     const uint32_t colIdx = (cyclePos > 3u) ? 3u : cyclePos;
                     const uint32_t maskCycle = (cyclePos > 3u) ? 3u : cyclePos;
+
+                    // GOW-Port: sin máscara, con datos y sin sumar la fila (STMOD 0/3), cada componente es el
+                    // valor descomprimido: el bucle por componente escribiría lo mismo.
+                    if (!maskEnable && decoded && handledFormat && (!canAdd || (mode != 1u && mode != 2u)))
+                    {
+                        std::memcpy(m_vu1Data + destOff, decompressed, sizeof(decompressed));
+                        continue;
+                    }
 
                     for (uint32_t field = 0u; field < 4u; ++field)
                     {

@@ -9,6 +9,9 @@
 #include <vector>
 
 #include "runtime/gs/gs_backend.h"
+#include "runtime/gs/ps2_gif_arbiter.h" // GOW-Port: conservar el origen de cada flujo GIF.
+
+namespace GSSharedPresent { struct Frame; }
 
 struct GSDebugSnapshot
 {
@@ -96,6 +99,18 @@ struct GSDebugHistoryEntry
     bool usedPreferred = false;
 };
 
+// GOW-Port: observador opcional; los bytes prestados solo viven durante la llamada.
+// No devuelve IRQ/FIFO ni cambia la autoridad del GS del runtime. No reentrar en GS.
+struct GSRegisters;
+struct GSExternalObserver
+{
+    virtual ~GSExternalObserver() = default;
+    virtual void gif(GifPathId path, const uint8_t* data, uint32_t size) noexcept = 0;
+    virtual void reg(uint8_t address, uint64_t value) noexcept = 0;
+    virtual void vsync(const GSRegisters& registers, uint64_t tick, uint32_t field) noexcept = 0;
+    virtual void reset() noexcept = 0;
+};
+
 class GS
 {
 public:
@@ -104,16 +119,22 @@ public:
 
     void init(uint8_t *vram, uint32_t vramSize, struct GSRegisters *privRegs = nullptr);
     void reset();
+    // GOW-Port: enlazar antes de ejecutar el EE; el consumidor empieza con VRAM vacía.
+    void setExternalObserver(std::shared_ptr<GSExternalObserver> observer);
+    bool hasExternalObserver() const;
+    void notifyExternalVSync(uint64_t tick, uint32_t field);
     void setRasterBackend(std::unique_ptr<GSRasterBackend> backend);
 
-    void processGIFPacket(const uint8_t *data, uint32_t sizeBytes);
-    bool processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes);
+    void processGIFPacket(const uint8_t *data, uint32_t sizeBytes, GifPathId path = GifPathId::Path1);
+    bool processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes, GifPathId path = GifPathId::Path1);
+    bool hasPendingGIFPacket(GifPathId path) const; // GOW-Port: los atajos DMA no pueden saltarse un flujo pendiente.
     void uploadImageNative(uint64_t bitbltbuf,
                            uint64_t trxpos,
                            uint64_t trxreg,
                            uint64_t trxdir,
                            const uint8_t *data,
-                           uint32_t sizeBytes);
+                           uint32_t sizeBytes,
+                           uint64_t setupGifTag = 0u); // GOW-Port: efectos del setup validado por DMA.
     void writeRegister(uint8_t regAddr, uint64_t value);
 
     const uint8_t *lockDisplaySnapshot(uint32_t &outSize);
@@ -130,6 +151,9 @@ public:
     void setDebugHistoryPaused(bool paused);
     bool getPreferredDisplaySource(GSFrameReg &outSource, uint32_t &outDestFbp) const;
     void latchHostPresentationFrame();
+    // GOW-Port: el host registra la textura adquirida, nunca el request posterior.
+    bool usesSharedPresentation() const;
+    void recordAcquiredSharedFrame(const GSSharedPresent::Frame &frame);
     bool copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
                                           uint32_t &outWidth,
                                           uint32_t &outHeight,
@@ -160,13 +184,13 @@ private:
                                    uint32_t sizeBytes);
     void vertexKick(bool drawing);
 
-    void recordDebugEventUnlocked(GSDebugHistoryEntry entry);
+    void recordDebugEventUnlocked(GSDebugHistoryEntry entry, uint64_t tickOverride = UINT64_MAX);
     GSDebugHistoryEntry makeDebugEventUnlocked(GSDebugEventKind kind) const;
     void recordGifTagDebugEventUnlocked(uint32_t sizeBytes, uint32_t nloop, uint8_t flg, uint32_t nreg);
     void recordRegisterDebugEventUnlocked(uint8_t regAddr, uint64_t value);
     void recordDrawDebugEventUnlocked(int vertexCount);
     void recordTransferDebugEventUnlocked();
-    void recordPresentDebugEventUnlocked(uint32_t displayFbp, uint32_t sourceFbp, uint32_t width, uint32_t height, bool usedPreferred);
+    void recordPresentDebugEventUnlocked(uint32_t displayFbp, uint32_t sourceFbp, uint32_t width, uint32_t height, bool usedPreferred, uint64_t tickOverride = UINT64_MAX);
 
     void processImageData(const uint8_t *data, uint32_t sizeBytes);
     bool tryProcessNativeImageUploadPacket(const uint8_t *data, uint32_t sizeBytes);
@@ -183,6 +207,18 @@ private:
     mutable std::recursive_mutex m_stateMutex;
     mutable std::mutex m_backendLifetimeMutex;
     mutable std::mutex m_presentationMutex;
+
+    // GOW-Port: cursor acotado por PATH, sin almacenar paquetes ni payloads completos.
+    struct GifInputState
+    {
+        std::array<uint8_t, 16> partial{};
+        std::array<uint8_t, 16> regs{};
+        uint32_t partialBytes = 0u, registersLeft = 0u, imageBytes = 0u, paddingBytes = 0u;
+        uint32_t nreg = 0u, regIndex = 0u;
+        uint8_t format = 0u;
+        bool pending() const { return partialBytes || registersLeft || imageBytes || paddingBytes; }
+    };
+    std::array<GifInputState, 4> m_gifInput{};
 
     GSContext m_ctx[2];
     GSPrimReg m_prim{};
@@ -229,6 +265,14 @@ private:
     uint32_t m_hostPresentationSourceFbp = 0;
     bool m_hostPresentationUsedPreferred = false;
     bool m_hasHostPresentationFrame = false;
+    // GOW-Port: la captura explicita conserva el CRTC del ultimo latch; GL sigue en el worker.
+    GSPresentationRequest m_hostPresentationRequest{};
+    bool m_hasHostPresentationRequest = false;
+    bool m_hostPresentationRequestIsShared = false;
+    uint64_t m_hostPresentationGeneration = 0u;
+    uint64_t m_hostSharedSequence = 0u;
+    mutable PresentationFrame m_hostDiagnosticFrame;
+    mutable uint64_t m_hostDiagnosticGeneration = UINT64_MAX;
     uint64_t m_nativeImageUploadCount = 0;
     uint64_t m_nativePackedGIFPacketCount = 0;
 
@@ -241,6 +285,7 @@ private:
     uint64_t m_debugLastVsyncTick = UINT64_MAX;
     bool m_debugHistoryPaused = true;
 
+    std::shared_ptr<GSExternalObserver> m_externalObserver; // GOW-Port: vida independiente de los callbacks.
     std::unique_ptr<GSRasterBackend> m_backend;
 };
 
