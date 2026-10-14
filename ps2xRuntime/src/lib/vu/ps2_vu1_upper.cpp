@@ -5,6 +5,15 @@
 #include <cstring>
 #include <limits>
 
+// GOW-Port: la aritmética de VU no depende de /fp:fast. El runtime se compila con /fp:fast, que deja al
+// compilador fusionar a*b+c en FMA según dónde esté el código: el intérprete y el microcódigo compilado
+// (o dos versiones del intérprete) podían dar resultados distintos. Aquí cada operación se redondea por
+// separado, como en las FMAC de la PS2 (y en PCSX2).
+#if defined(_MSC_VER)
+#pragma float_control(precise, on, push)
+#pragma fp_contract(off)
+#endif
+
 namespace
 {
     int32_t vuFloatToInt(float value, float scale)

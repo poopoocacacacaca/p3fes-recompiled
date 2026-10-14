@@ -1,11 +1,17 @@
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/gs_cpu_backend.h"
+// GOW-Port: CPU de referencia por defecto; OpenGL/cola seleccionables.
+#include "runtime/gs/gs_threaded_backend.h"
+#include "runtime/gs/gs_shared_present.h"
 #include "ps2_log.h"
+#include "runtime/ps2_perf.h"
 #include "runtime/ps2_memory.h"
 #include <atomic>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <sstream>
@@ -13,6 +19,35 @@
 namespace
 {
     static constexpr uint32_t kHostFrameWidth = 640u;
+
+    // GOW-Port: ambas rutas CPU/GPU devuelven filas de 640; las capturas son compactas.
+    bool copyPresentationPixels(const std::vector<uint8_t> &pixels,
+                                uint32_t width, uint32_t height,
+                                uint32_t displayFbp, uint32_t sourceFbp, bool usedPreferred,
+                                std::vector<uint8_t> &outPixels, uint32_t &outWidth, uint32_t &outHeight,
+                                uint32_t *outDisplayFbp, uint32_t *outSourceFbp, bool *outUsedPreferred)
+    {
+        outPixels.clear();
+        outWidth = outHeight = 0u;
+        if (outDisplayFbp) *outDisplayFbp = 0u;
+        if (outSourceFbp) *outSourceFbp = 0u;
+        if (outUsedPreferred) *outUsedPreferred = false;
+        const size_t sourceRowBytes = static_cast<size_t>(kHostFrameWidth) * 4u;
+        const size_t packedRowBytes = static_cast<size_t>(width) * 4u;
+        if (width == 0u || height == 0u || width > kHostFrameWidth ||
+            static_cast<size_t>(height) > pixels.size() / sourceRowBytes)
+            return false;
+        outPixels.resize(packedRowBytes * static_cast<size_t>(height));
+        for (uint32_t y = 0u; y < height; ++y)
+            std::memcpy(outPixels.data() + static_cast<size_t>(y) * packedRowBytes,
+                        pixels.data() + static_cast<size_t>(y) * sourceRowBytes, packedRowBytes);
+        outWidth = width;
+        outHeight = height;
+        if (outDisplayFbp) *outDisplayFbp = displayFbp;
+        if (outSourceFbp) *outSourceFbp = sourceFbp;
+        if (outUsedPreferred) *outUsedPreferred = usedPreferred;
+        return true;
+    }
 
     GSPrimReg decodePrimRegister(uint64_t value)
     {
@@ -106,7 +141,7 @@ namespace
 
 
 GS::GS()
-    : m_backend(std::make_unique<GSCpuBackend>())
+    : m_backend(GSThreadedBackend::MakeDefault())
 {
     reset();
 }
@@ -117,15 +152,37 @@ void GS::init(uint8_t *vram, uint32_t vramSize, GSRegisters *privRegs)
     m_localMemorySize = vramSize;
     m_privRegs = privRegs;
     if (!m_backend)
-        m_backend = std::make_unique<GSCpuBackend>();
+        m_backend = GSThreadedBackend::MakeDefault();
     m_backend->Initialize(vram, vramSize);
     reset();
+}
+
+// GOW-Port: el mutex del frontend ordena GIF, escrituras directas y la instantánea del EE.
+void GS::setExternalObserver(std::shared_ptr<GSExternalObserver> observer)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    m_externalObserver = std::move(observer);
+}
+
+bool GS::hasExternalObserver() const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    return static_cast<bool>(m_externalObserver);
+}
+
+void GS::notifyExternalVSync(uint64_t tick, uint32_t field)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    if (m_externalObserver && m_privRegs && field <= 1u)
+        m_externalObserver->vsync(*m_privRegs, tick, field);
 }
 
 void GS::reset()
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    if (m_externalObserver) m_externalObserver->reset(); // GOW-Port: conservar el enlace tras reset.
     std::memset(m_ctx, 0, sizeof(m_ctx));
+    m_gifInput = {}; // GOW-Port: reset tambien descarta etiquetas/registros incompletos.
     m_prim = {};
     m_primRegister = {};
     m_prmodeRegister = {};
@@ -174,6 +231,12 @@ void GS::reset()
         m_hostPresentationSourceFbp = 0u;
         m_hostPresentationUsedPreferred = false;
         m_hasHostPresentationFrame = false;
+        m_hasHostPresentationRequest = false;
+        m_hostPresentationRequestIsShared = false;
+        ++m_hostPresentationGeneration;
+        m_hostSharedSequence = 0u;
+        m_hostDiagnosticFrame = {};
+        m_hostDiagnosticGeneration = UINT64_MAX;
     }
 
     m_debugHistoryWrite = 0;
@@ -320,14 +383,16 @@ GSDebugHistoryEntry GS::makeDebugEventUnlocked(GSDebugEventKind kind) const
     return entry;
 }
 
-void GS::recordDebugEventUnlocked(GSDebugHistoryEntry entry)
+void GS::recordDebugEventUnlocked(GSDebugHistoryEntry entry, uint64_t tickOverride)
 {
     if (m_debugHistoryPaused)
     {
         return;
     }
 
-    const uint64_t tick = m_privRegs ? m_privRegs->vsyncTick.load(std::memory_order_acquire) : 0u;
+    // GOW-Port: Present puede mostrar un frame previo al CRTC actual del host.
+    const uint64_t tick = tickOverride != UINT64_MAX ? tickOverride :
+        (m_privRegs ? m_privRegs->vsyncTick.load(std::memory_order_acquire) : 0u);
     if (m_debugLastVsyncTick == UINT64_MAX)
     {
         m_debugLastVsyncTick = tick;
@@ -457,7 +522,7 @@ void GS::recordTransferDebugEventUnlocked()
     recordDebugEventUnlocked(entry);
 }
 
-void GS::recordPresentDebugEventUnlocked(uint32_t displayFbp, uint32_t sourceFbp, uint32_t width, uint32_t height, bool usedPreferred)
+void GS::recordPresentDebugEventUnlocked(uint32_t displayFbp, uint32_t sourceFbp, uint32_t width, uint32_t height, bool usedPreferred, uint64_t tickOverride)
 {
     if (m_debugHistoryPaused)
     {
@@ -470,7 +535,7 @@ void GS::recordPresentDebugEventUnlocked(uint32_t displayFbp, uint32_t sourceFbp
     entry.width = width;
     entry.height = height;
     entry.usedPreferred = usedPreferred;
-    recordDebugEventUnlocked(entry);
+    recordDebugEventUnlocked(entry, tickOverride);
 }
 
 bool GS::getPreferredDisplaySource(GSFrameReg &outSource, uint32_t &outDestFbp) const
@@ -535,18 +600,29 @@ void GS::latchHostPresentationFrame()
             m_hostPresentationFrame.clear();
             m_hasHostPresentationFrame = false;
             m_hostPresentationWidth = m_hostPresentationHeight = 0u;
+            m_hasHostPresentationRequest = false;
+            m_hostPresentationRequestIsShared = false;
+            ++m_hostPresentationGeneration;
+            m_hostDiagnosticFrame = {};
             return;
         }
         request = buildPresentationRequestUnlocked();
     }
 
     PresentationFrame frame{};
+    bool shared = false;
     {
         std::lock_guard<std::mutex> backendLock(m_backendLifetimeMutex);
         if (m_backend)
         {
-            m_backend->Flush();
-            m_backend->Sync(GSSyncReason::Presentation);
+            // GOW-Port: Present compartido encola y procesa los draws previos en FIFO.
+            // Flush aqui anularia la asincronia; las lecturas y FINISH conservan su barrera.
+            shared = m_backend->UsesSharedPresentation();
+            if (!shared)
+            {
+                m_backend->Flush();
+                m_backend->Sync(GSSyncReason::Presentation);
+            }
             frame = m_backend->Present(request);
         }
     }
@@ -559,19 +635,57 @@ void GS::latchHostPresentationFrame()
     const bool usedPreferred = frame.usedPreferred;
     {
         std::lock_guard<std::mutex> presentationLock(m_presentationMutex);
+        const bool wasShared = m_hostPresentationRequestIsShared;
+        m_hostPresentationRequest = request;
+        m_hasHostPresentationRequest = true;
+        m_hostPresentationRequestIsShared = shared;
+        ++m_hostPresentationGeneration;
+        m_hostDiagnosticFrame = {};
+        m_hostDiagnosticGeneration = UINT64_MAX;
         m_hostPresentationFrame = std::move(frame.pixels);
-        m_hostPresentationWidth = width;
-        m_hostPresentationHeight = height;
-        m_hostPresentationDisplayFbp = displayFbp;
-        m_hostPresentationSourceFbp = sourceFbp;
-        m_hostPresentationUsedPreferred = usedPreferred;
-        m_hasHostPresentationFrame = hasFrame;
+        if (!shared || !wasShared)
+        {
+            m_hostPresentationWidth = width;
+            m_hostPresentationHeight = height;
+            m_hostPresentationDisplayFbp = displayFbp;
+            m_hostPresentationSourceFbp = sourceFbp;
+            m_hostPresentationUsedPreferred = usedPreferred;
+            m_hasHostPresentationFrame = hasFrame;
+        }
     }
 
     if (hasFrame)
     {
         std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
-        recordPresentDebugEventUnlocked(displayFbp, sourceFbp, width, height, usedPreferred);
+        recordPresentDebugEventUnlocked(displayFbp, sourceFbp, width, height, usedPreferred, request.vsyncTick);
+    }
+}
+
+bool GS::usesSharedPresentation() const
+{
+    std::lock_guard<std::mutex> backendLock(m_backendLifetimeMutex);
+    return m_backend && m_backend->UsesSharedPresentation();
+}
+
+void GS::recordAcquiredSharedFrame(const GSSharedPresent::Frame &frame)
+{
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(m_presentationMutex);
+        changed = frame.sequence != m_hostSharedSequence;
+        m_hostSharedSequence = frame.sequence;
+        m_hostPresentationWidth = frame.blank ? 0u : frame.width;
+        m_hostPresentationHeight = frame.blank ? 0u : frame.height;
+        m_hostPresentationDisplayFbp = frame.blank ? 0u : frame.displayFbp;
+        m_hostPresentationSourceFbp = frame.blank ? 0u : frame.sourceFbp;
+        m_hostPresentationUsedPreferred = !frame.blank && frame.usedPreferred;
+        m_hasHostPresentationFrame = !frame.blank && frame.width != 0u && frame.height != 0u;
+    }
+    if (changed && !frame.blank)
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+        recordPresentDebugEventUnlocked(frame.displayFbp, frame.sourceFbp,
+                                        frame.width, frame.height, frame.usedPreferred, frame.vsyncTick);
     }
 }
 
@@ -582,74 +696,77 @@ bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
                                           uint32_t *outSourceFbp,
                                           bool *outUsedPreferred) const
 {
+    const auto copy = [&](const PresentationFrame &frame)
+    {
+        return copyPresentationPixels(frame.pixels, frame.width, frame.height,
+                                      frame.displayFbp, frame.sourceFbp, frame.usedPreferred,
+                                      outPixels, outWidth, outHeight,
+                                      outDisplayFbp, outSourceFbp, outUsedPreferred);
+    };
+    GSPresentationRequest request{};
+    uint64_t generation = 0u;
+    {
+        std::lock_guard<std::mutex> lock(m_presentationMutex);
+        if (!m_hostPresentationRequestIsShared)
+            return copyPresentationPixels(m_hostPresentationFrame,
+                                          m_hostPresentationWidth, m_hostPresentationHeight,
+                                          m_hostPresentationDisplayFbp, m_hostPresentationSourceFbp,
+                                          m_hostPresentationUsedPreferred,
+                                          outPixels, outWidth, outHeight,
+                                          outDisplayFbp, outSourceFbp, outUsedPreferred);
+        if (!m_hasHostPresentationRequest)
+            return copy({});
+        generation = m_hostPresentationGeneration;
+        if (m_hostDiagnosticGeneration == generation)
+            return copy(m_hostDiagnosticFrame);
+        request = m_hostPresentationRequest;
+    }
+
+    // GOW-Port: descarga bajo demanda sobre VRAM actual con el CRTC latched.
+    // La barrera y todo GL se ejecutan en el hilo propietario del backend.
+    request.forceReadback = true;
+    PresentationFrame frame{};
+    {
+        std::lock_guard<std::mutex> backendLock(m_backendLifetimeMutex);
+        if (m_backend && m_backend->UsesSharedPresentation())
+            frame = m_backend->Present(request);
+    }
     std::lock_guard<std::mutex> lock(m_presentationMutex);
-    if (!m_hasHostPresentationFrame || m_hostPresentationFrame.empty())
+    if (generation == m_hostPresentationGeneration)
     {
-        outPixels.clear();
-        outWidth = 0u;
-        outHeight = 0u;
-        if (outDisplayFbp)
-            *outDisplayFbp = 0u;
-        if (outSourceFbp)
-            *outSourceFbp = 0u;
-        if (outUsedPreferred)
-            *outUsedPreferred = false;
-        return false;
+        m_hostDiagnosticFrame = std::move(frame);
+        m_hostDiagnosticGeneration = generation;
+        return copy(m_hostDiagnosticFrame);
     }
-
-    outWidth = m_hostPresentationWidth;
-    outHeight = m_hostPresentationHeight;
-    if (outDisplayFbp)
-        *outDisplayFbp = m_hostPresentationDisplayFbp;
-    if (outSourceFbp)
-        *outSourceFbp = m_hostPresentationSourceFbp;
-    if (outUsedPreferred)
-        *outUsedPreferred = m_hostPresentationUsedPreferred;
-
-    const size_t packedRowBytes = static_cast<size_t>(outWidth) * 4u;
-    outPixels.resize(packedRowBytes * static_cast<size_t>(outHeight));
-    if (outWidth != 0u && outHeight != 0u)
-    {
-        const size_t sourceRowBytes = static_cast<size_t>(kHostFrameWidth) * 4u;
-        for (uint32_t y = 0; y < outHeight; ++y)
-        {
-            const size_t srcOffset = static_cast<size_t>(y) * sourceRowBytes;
-            const size_t dstOffset = static_cast<size_t>(y) * packedRowBytes;
-            if (srcOffset + packedRowBytes > m_hostPresentationFrame.size() ||
-                dstOffset + packedRowBytes > outPixels.size())
-            {
-                outPixels.clear();
-                outWidth = 0u;
-                outHeight = 0u;
-                if (outDisplayFbp)
-                    *outDisplayFbp = 0u;
-                if (outSourceFbp)
-                    *outSourceFbp = 0u;
-                if (outUsedPreferred)
-                    *outUsedPreferred = false;
-                return false;
-            }
-
-            std::memcpy(outPixels.data() + dstOffset,
-                        m_hostPresentationFrame.data() + srcOffset,
-                        packedRowBytes);
-        }
-    }
-    return true;
+    // Otro latch puede avanzar mientras la captura espera: no contaminar su cache.
+    return copy(frame);
 }
 
-void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
+// GOW-Port: los atajos nativos solo son validos al comienzo de una etiqueta de este PATH.
+bool GS::hasPendingGIFPacket(GifPathId path) const
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
-    if (!data || sizeBytes < 16 || !m_backend)
+    const size_t index = static_cast<size_t>(path);
+    return index == 0u || index >= m_gifInput.size() || m_gifInput[index].pending();
+}
+
+void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes, GifPathId path)
+{
+    ps2_perf::Scope perf(ps2_perf::Bucket::Gs); // GOW-Port: incluye rasterizado y transferencias GIF.
+    std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    const size_t pathIndex = static_cast<size_t>(path);
+    if (!data || !sizeBytes || !m_backend || pathIndex == 0u || pathIndex >= m_gifInput.size())
         return;
 
-    if (tryProcessNativeImageUploadPacket(data, sizeBytes))
+    // GOW-Port: observar el span original una sola vez, antes de cualquier atajo interno.
+    if (m_externalObserver) m_externalObserver->gif(path, data, sizeBytes);
+    auto &input = m_gifInput[pathIndex];
+    if (!input.pending() && tryProcessNativeImageUploadPacket(data, sizeBytes))
         return;
 
     PS2_IF_AGRESSIVE_LOGS({
         const uint32_t packetIndex = s_debugGifPacketCount.fetch_add(1, std::memory_order_relaxed);
-        if (packetIndex < 48u)
+        if (packetIndex < 48u && sizeBytes >= 16u)
         {
             const uint64_t tagLo = loadLE64(data);
             const uint32_t nloop = static_cast<uint32_t>(tagLo & 0x7FFFu);
@@ -668,78 +785,93 @@ void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
         }
     });
 
-    uint32_t offset = 0;
-    while (offset + 16 <= sizeBytes)
+    // GOW-Port: como maximo se retienen 15 bytes por PATH, mas el cursor de la etiqueta.
+    // No reiniciar Q/PRE ni perder el indice de registro al llegar otro fragmento.
+    uint32_t offset = 0u;
+    while (offset < sizeBytes)
     {
-        uint64_t tagLo = loadLE64(data + offset);
-        uint64_t tagHi = loadLE64(data + offset + 8);
-        offset += 16;
-
-        m_curQ = 1.0f;
-
-        uint32_t nloop = static_cast<uint32_t>(tagLo & 0x7FFF);
-        uint8_t flg = static_cast<uint8_t>((tagLo >> 58) & 0x3);
-        uint32_t nreg = static_cast<uint32_t>((tagLo >> 60) & 0xF);
-        if (nreg == 0)
-            nreg = 16;
-
-        recordGifTagDebugEventUnlocked(sizeBytes, nloop, flg, nreg);
-
-        bool pre = ((tagLo >> 46) & 1) != 0;
-        if (pre)
+        if (input.imageBytes && !input.partialBytes && sizeBytes - offset >= 16u)
         {
-            writeRegisterUnlocked(GS_REG_PRIM, (tagLo >> 47) & 0x7FF);
+            // Mantener las subidas contiguas grandes; no llamar al backend por cada quadword.
+            const uint32_t bytes = std::min(input.imageBytes, sizeBytes - offset) & ~15u;
+            processImageData(data + offset, bytes);
+            input.imageBytes -= bytes;
+            offset += bytes;
+            continue;
+        }
+        if (!input.registersLeft && input.paddingBytes)
+        {
+            const uint32_t bytes = std::min(input.paddingBytes, sizeBytes - offset);
+            input.paddingBytes -= bytes;
+            offset += bytes;
+            continue;
         }
 
-        uint8_t regs[16];
-        for (uint32_t i = 0; i < nreg; ++i)
-            regs[i] = static_cast<uint8_t>((tagHi >> (i * 4)) & 0xF);
-
-        if (flg == GIF_FMT_PACKED)
+        const bool header = !input.registersLeft && !input.imageBytes;
+        const uint32_t unitBytes = !header && input.format == GIF_FMT_REGLIST ? 8u : 16u;
+        const uint8_t *unit = nullptr;
+        if (!input.partialBytes && sizeBytes - offset >= unitBytes)
         {
-            for (uint32_t loop = 0; loop < nloop; ++loop)
+            unit = data + offset;
+            offset += unitBytes;
+        }
+        else
+        {
+            const uint32_t bytes = std::min(unitBytes - input.partialBytes, sizeBytes - offset);
+            std::memcpy(input.partial.data() + input.partialBytes, data + offset, bytes);
+            input.partialBytes += bytes;
+            offset += bytes;
+            if (input.partialBytes < unitBytes) break;
+            unit = input.partial.data();
+            input.partialBytes = 0u;
+        }
+
+        if (header)
+        {
+            const uint64_t tagLo = loadLE64(unit), tagHi = loadLE64(unit + 8u);
+            const uint32_t nloop = static_cast<uint32_t>(tagLo & 0x7FFFu);
+            input.format = static_cast<uint8_t>((tagLo >> 58u) & 0x3u);
+            input.nreg = static_cast<uint32_t>((tagLo >> 60u) & 0xFu);
+            if (!input.nreg) input.nreg = 16u;
+            input.regIndex = 0u;
+            recordGifTagDebugEventUnlocked(sizeBytes, nloop, input.format, input.nreg);
+            if (!nloop) continue; // NLOOP=0 conserva PRIM, vertices y Q.
+            m_curQ = 1.0f;
+            if (input.format == GIF_FMT_PACKED && ((tagLo >> 46u) & 1u))
+                writeRegisterUnlocked(GS_REG_PRIM, (tagLo >> 47u) & 0x7FFu);
+            for (uint32_t i = 0u; i < input.nreg; ++i)
+                input.regs[i] = static_cast<uint8_t>((tagHi >> (i * 4u)) & 0xFu);
+            if (input.format == GIF_FMT_PACKED || input.format == GIF_FMT_REGLIST)
             {
-                for (uint32_t r = 0; r < nreg; ++r)
-                {
-                    if (offset + 16 > sizeBytes)
-                        return;
-                    uint64_t lo = loadLE64(data + offset);
-                    uint64_t hi = loadLE64(data + offset + 8);
-                    offset += 16;
-                    writeRegisterPacked(regs[r], lo, hi);
-                }
+                input.registersLeft = nloop * input.nreg;
+                input.paddingBytes = input.format == GIF_FMT_REGLIST && (input.registersLeft & 1u) ? 8u : 0u;
             }
+            // GOW-Port: IMAGE2 consume tambien su payload, sin aplicar PRE.
+            else if (input.format == GIF_FMT_IMAGE || input.format == GIF_FMT_IMAGE2)
+                input.imageBytes = nloop * 16u;
         }
-        else if (flg == GIF_FMT_REGLIST)
+        else if (input.imageBytes)
         {
-            for (uint32_t loop = 0; loop < nloop; ++loop)
-            {
-                for (uint32_t r = 0; r < nreg; ++r)
-                {
-                    if (offset + 8 > sizeBytes)
-                        return;
-                    writeRegisterUnlocked(regs[r], loadLE64(data + offset));
-                    offset += 8;
-                }
-            }
-            if ((nloop * nreg) & 1)
-                offset += 8;
+            processImageData(unit, 16u);
+            input.imageBytes -= 16u;
         }
-        else if (flg == GIF_FMT_IMAGE)
+        else
         {
-            uint32_t imageBytes = nloop * 16;
-            if (offset + imageBytes > sizeBytes)
-                imageBytes = sizeBytes - offset;
-            processImageData(data + offset, imageBytes);
-            offset += imageBytes;
+            if (input.format == GIF_FMT_PACKED)
+                writeRegisterPacked(input.regs[input.regIndex], loadLE64(unit), loadLE64(unit + 8u));
+            else
+                writeRegisterUnlocked(input.regs[input.regIndex], loadLE64(unit));
+            if (++input.regIndex == input.nreg) input.regIndex = 0u;
+            --input.registersLeft;
         }
     }
 }
 
-bool GS::processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes)
+bool GS::processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes, GifPathId path)
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
-    if (!data || sizeBytes < 16u || !m_backend)
+    // GOW-Port: el llamante debe usar la ruta genérica, que conserva tags y orden.
+    if (m_externalObserver || !data || sizeBytes < 16u || !m_backend || hasPendingGIFPacket(path))
         return false;
 
     if (!validatePackedGifPacket(data, sizeBytes))
@@ -747,9 +879,12 @@ bool GS::processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes)
 
     const bool processed = visitPackedGifPacket(data, sizeBytes, [&](const PackedGifPacketTag &tag)
                                                 {
-        m_curQ = 1.0f;
-
         recordGifTagDebugEventUnlocked(sizeBytes, tag.nloop, GIF_FMT_PACKED, tag.nreg);
+
+        // GOW-Port: aplicar la misma regla NLOOP=0 en la ruta nativa validada.
+        if (tag.nloop == 0u)
+            return true;
+        m_curQ = 1.0f;
 
         const bool pre = ((tag.lo >> 46u) & 1u) != 0u;
         if (pre)
@@ -781,9 +916,18 @@ void GS::uploadImageNative(uint64_t bitbltbuf,
                            uint64_t trxreg,
                            uint64_t trxdir,
                            const uint8_t *data,
-                           uint32_t sizeBytes)
+                           uint32_t sizeBytes,
+                           uint64_t setupGifTag)
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    // GOW-Port: DMA valida toda la cadena antes de aplicar PRE/Q, bajo el mismo lock que la subida.
+    if (data && sizeBytes && m_backend && (setupGifTag & 0x7FFFu) &&
+        ((setupGifTag >> 58u) & 3u) == GIF_FMT_PACKED)
+    {
+        m_curQ = 1.0f;
+        if ((setupGifTag >> 46u) & 1u)
+            writeRegisterUnlocked(GS_REG_PRIM, (setupGifTag >> 47u) & 0x7FFu);
+    }
     uploadImageNativeUnlocked(bitbltbuf, trxpos, trxreg, trxdir, data, sizeBytes);
 }
 
@@ -860,7 +1004,7 @@ bool GS::tryProcessNativeImageUploadPacket(const uint8_t *data, uint32_t sizeByt
     const uint64_t imageTagLo = loadLE64(data + offset);
     const uint8_t imageFlg = static_cast<uint8_t>((imageTagLo >> 58u) & 0x3u);
     const uint32_t imageNloop = static_cast<uint32_t>(imageTagLo & 0x7FFFu);
-    if (imageFlg != GIF_FMT_IMAGE || imageNloop == 0u)
+    if ((imageFlg != GIF_FMT_IMAGE && imageFlg != GIF_FMT_IMAGE2) || imageNloop == 0u)
         return false;
 
     offset += 16u;
@@ -871,6 +1015,11 @@ bool GS::tryProcessNativeImageUploadPacket(const uint8_t *data, uint32_t sizeByt
     if (offset + imageBytes != sizeBytes)
         return false;
 
+    // GOW-Port: el atajo conserva los efectos de las etiquetas no vacias del parser general.
+    // Solo PRE del setup PACKED cambia PRIM; PRE de IMAGE no tiene efecto.
+    m_curQ = 1.0f;
+    if ((setupTagLo & (1ull << 46u)) != 0u)
+        writeRegisterUnlocked(GS_REG_PRIM, (setupTagLo >> 47u) & 0x7FFu);
     uploadImageNativeUnlocked(regs[0], regs[1], regs[2], regs[3], data + offset, imageBytes);
     return true;
 }
@@ -910,6 +1059,7 @@ void GS::writeRegisterPacked(uint8_t regDesc, uint64_t lo, uint64_t hi)
         uint16_t y = static_cast<uint16_t>((lo >> 32) & 0xFFFF);
         uint32_t z = static_cast<uint32_t>((hi >> 4) & 0xFFFFFF);
         uint8_t f = static_cast<uint8_t>((hi >> 36) & 0xFF);
+        m_curFog = f; // GOW-Port: XYZF escribe FOG también con ADC, para el XYZ posterior.
         bool adk = ((hi >> 47) & 1) != 0;
         PS2_IF_AGRESSIVE_LOGS({
             const uint32_t debugIndex = s_debugGsPackedVertexCount.fetch_add(1, std::memory_order_relaxed);
@@ -966,7 +1116,8 @@ void GS::writeRegisterPacked(uint8_t regDesc, uint64_t lo, uint64_t hi)
         GSVertex &vtx = m_vtxQueue[m_vtxCount % kMaxVerts];
         vtx.x = static_cast<float>(x) / 16.0f;
         vtx.y = static_cast<float>(y) / 16.0f;
-        vtx.z = static_cast<float>(z);
+        // GOW-Port: XYZ2 trae Z32; float pierde bits y redondea UINT32_MAX a 2^32.
+        vtx.z = static_cast<double>(z);
         vtx.r = m_curR;
         vtx.g = m_curG;
         vtx.b = m_curB;
@@ -1010,7 +1161,8 @@ void GS::writeRegisterPacked(uint8_t regDesc, uint64_t lo, uint64_t hi)
         vtx.t = m_curT;
         vtx.u = m_curU;
         vtx.v = m_curV;
-        vtx.fog = static_cast<uint8_t>((hi >> 36) & 0xFF);
+        m_curFog = static_cast<uint8_t>((hi >> 36) & 0xFF); // GOW-Port: XYZF3 retiene FOG sin dibujar.
+        vtx.fog = m_curFog;
         vertexKick(false);
         break;
     }
@@ -1031,7 +1183,8 @@ void GS::writeRegisterPacked(uint8_t regDesc, uint64_t lo, uint64_t hi)
         GSVertex &vtx = m_vtxQueue[m_vtxCount % kMaxVerts];
         vtx.x = static_cast<float>(lo & 0xFFFF) / 16.0f;
         vtx.y = static_cast<float>((lo >> 32) & 0xFFFF) / 16.0f;
-        vtx.z = static_cast<float>(hi & 0xFFFFFFFF);
+        // GOW-Port: XYZ3 conserva la misma profundidad Z32 aunque no lance el dibujo.
+        vtx.z = static_cast<double>(hi & 0xFFFFFFFF);
         vtx.r = m_curR;
         vtx.g = m_curG;
         vtx.b = m_curB;
@@ -1062,6 +1215,7 @@ void GS::writeRegisterPacked(uint8_t regDesc, uint64_t lo, uint64_t hi)
 void GS::writeRegister(uint8_t regAddr, uint64_t value)
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    if (m_externalObserver) m_externalObserver->reg(regAddr, value); // GOW-Port: stubs sin GIF.
     writeRegisterUnlocked(regAddr, value);
 }
 
@@ -1189,7 +1343,8 @@ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
         vtx.x = static_cast<float>(value & 0xFFFF) / 16.0f;
         vtx.y = static_cast<float>((value >> 16) & 0xFFFF) / 16.0f;
         vtx.z = static_cast<double>((value >> 32) & 0xFFFFFF);
-        vtx.fog = static_cast<uint8_t>((value >> 56) & 0xFF);
+        m_curFog = static_cast<uint8_t>((value >> 56) & 0xFF); // GOW-Port: A+D/REGLIST comparten FOG.
+        vtx.fog = m_curFog;
         vtx.r = m_curR;
         vtx.g = m_curG;
         vtx.b = m_curB;
@@ -1478,7 +1633,9 @@ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
     {
         if (m_backend)
         {
-            m_backend->Flush();
+            static const bool finishAsync = [] { const char *v = std::getenv("GOW_GS_FINISH_ASINCRONO"); return v && v[0] == '1'; }();
+            if (!finishAsync)
+                m_backend->Flush();
             m_backend->Sync(GSSyncReason::Finish);
         }
         if (m_privRegs)
@@ -1526,6 +1683,32 @@ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
 
 void GS::vertexKick(bool drawing)
 {
+    // GOW-Port: PS2X_GS_TRACE_TBP=<tbp0> registra los vertices que llegan con esa textura activa.
+    {
+        static const long traceTbp = []
+        {
+            const char *v = std::getenv("PS2X_GS_TRACE_TBP");
+            return v ? std::strtol(v, nullptr, 10) : -1L;
+        }();
+        static int traced = 0;
+        // PS2X_GS_TRACE_AFTER=<segundos>: empezar la traza pasados esos segundos desde el primer vertice.
+        static const long traceAfter = []
+        {
+            const char *v = std::getenv("PS2X_GS_TRACE_AFTER");
+            return v ? std::strtol(v, nullptr, 10) : 0L;
+        }();
+        static const auto traceStart = std::chrono::steady_clock::now();
+        const GSContext &tc = m_ctx[m_prim.ctxt ? 1 : 0];
+        if (traceTbp >= 0 && m_prim.tme && static_cast<long>(tc.tex0.tbp0) == traceTbp && traced < 400 &&
+            std::chrono::steady_clock::now() - traceStart >= std::chrono::seconds(traceAfter))
+        {
+            ++traced;
+            const GSVertex &v = m_vtxQueue[m_vtxCount % kMaxVerts];
+            std::cerr << "[gs:trace] prim=" << static_cast<unsigned>(m_prim.type) << " draw=" << drawing
+                      << " cnt=" << m_vtxCount << " xy=(" << v.x << "," << v.y << ") stq=(" << v.s << "," << v.t
+                      << "," << v.q << ") uv=(" << (v.u >> 4) << "," << (v.v >> 4) << ")" << std::endl;
+        }
+    }
     ++m_vtxCount;
     ++m_vtxIndex;
 
@@ -1659,6 +1842,21 @@ void GS::setRasterBackend(std::unique_ptr<GSRasterBackend> backend)
 
     m_backend = std::move(backend);
     m_backend->Initialize(m_localMemoryStorage, m_localMemorySize);
+    // GOW-Port: una nueva instancia inicia su propia secuencia y cache de diagnostico.
+    std::lock_guard<std::mutex> presentationLock(m_presentationMutex);
+    if (m_hostPresentationRequestIsShared)
+    {
+        m_hostPresentationWidth = m_hostPresentationHeight = 0u;
+        m_hostPresentationDisplayFbp = m_hostPresentationSourceFbp = 0u;
+        m_hostPresentationUsedPreferred = false;
+        m_hasHostPresentationFrame = false;
+    }
+    m_hasHostPresentationRequest = false;
+    m_hostPresentationRequestIsShared = false;
+    ++m_hostPresentationGeneration;
+    m_hostSharedSequence = 0u;
+    m_hostDiagnosticFrame = {};
+    m_hostDiagnosticGeneration = UINT64_MAX;
 }
 
 uint32_t GS::ReadVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y) const
@@ -1722,8 +1920,9 @@ void GS::updatePreferredDisplaySourceForDraw(const GSPrimitiveBatch &batch)
     const int yEnd = y0 + std::max(1, y1 - y0) - 1;
     const uint8_t alphaMode = static_cast<uint8_t>(ctx.alpha & 0xFFu);
     const uint8_t alphaFix = static_cast<uint8_t>((ctx.alpha >> 32u) & 0xFFu);
+    // GOW-Port: FRAME usa páginas de 8 KiB y TEX0 bloques de 256 B; comparar direcciones.
     const bool displayCopy = state.prim.tme && state.prim.abe && state.prim.fst && state.prim.ctxt &&
-                             ctx.frame.fbp != ctx.tex0.tbp0 && alphaMode == 0x64u &&
+                             ctx.frame.fbp * 32u != ctx.tex0.tbp0 && alphaMode == 0x64u &&
                              (alphaFix == 0x60u || alphaFix == 0x80u) &&
                              x0 <= 0 && y0 <= 0 && xEnd >= 639 && yEnd >= 447;
     if (displayCopy)
