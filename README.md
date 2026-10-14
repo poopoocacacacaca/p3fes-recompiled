@@ -2,9 +2,9 @@
 
 <img src="p3fes/branding/recompiled.svg" alt="RECOMPILED: PS2 static recompilation, native PC port" width="100%">
 
-# Persona 3 FES · PS2 Static Recompilation
+# Static Recompilation of Persona 3 FES (PS2)
 
-**A native PC port of *Shin Megami Tensei: Persona 3 FES* (NTSC-U `SLUS-21621`).**<br>
+**An attempt at a static recompilation of *Shin Megami Tensei: Persona 3 FES* (NTSC-U `SLUS-21621`)**<br>
 The game's MIPS R5900 code is statically recompiled to C++ and run on a reimplementation of the PS2 hardware. No emulator is involved.
 
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-1b8cff)
