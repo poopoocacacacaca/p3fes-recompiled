@@ -41,6 +41,8 @@ namespace ps2x::iop::detail
             std::lock_guard<std::mutex> lock(m_outputMutex);
             m_output.clear();
         }
+        for (auto &input : m_input)
+            input = InputState{};
         m_lastCycle = 0;
         m_interrupt = false;
         reg(RegStatx) = StatxDmaReady;
@@ -154,6 +156,10 @@ namespace ps2x::iop::detail
             setReg32(base + RegTsa, tsa + 1u);
             return;
         }
+        case RegAdmas:
+            if ((value & (core + 1u)) == 0u)
+                m_input[core] = InputState{};
+            return;
         case RegEndx:
             m_endx[core] &= 0xFF0000u;
             return;
@@ -185,7 +191,18 @@ namespace ps2x::iop::detail
     {
         const uint32_t base = core * 0x400u;
         if ((reg(base + RegAdmas) & (core + 1u)) != 0u)
-            return false;
+        {
+            // P3FES: AutoDMA. Needs proper testing beyond CRI ADX streams.
+            InputState &input = m_input[core];
+            if (input.queueRead != 0u && input.queueRead == input.queue.size())
+            {
+                input.queue.clear();
+                input.queueRead = 0u;
+            }
+            input.queue.insert(input.queue.end(), source, source + bytes);
+            feedInput(core);
+            return true;
+        }
         uint32_t tsa = reg32(base + RegTsa);
         for (size_t i = 0; i + 1u < bytes; i += 2u)
             writeRam(tsa++, static_cast<uint16_t>(source[i] | (source[i + 1u] << 8u)));
@@ -404,6 +421,30 @@ namespace ps2x::iop::detail
         return v.lastOutput;
     }
 
+    // Moves whole 512-byte ADMA blocks (256 L samples, then 256 R samples) into the input ring.
+    void Spu2::feedInput(uint32_t core)
+    {
+        InputState &input = m_input[core];
+        constexpr size_t kBlockBytes = 1024u;
+        while (input.queue.size() - input.queueRead >= kBlockBytes && input.ringCount + 256u <= InputFrames)
+        {
+            const uint8_t *block = input.queue.data() + input.queueRead;
+            for (uint32_t i = 0; i < 256u; ++i)
+            {
+                const uint32_t slot = (input.ringRead + input.ringCount + i) % InputFrames;
+                input.ring[slot][0] = static_cast<int16_t>(block[i * 2u] | (block[i * 2u + 1u] << 8u));
+                input.ring[slot][1] = static_cast<int16_t>(block[512u + i * 2u] | (block[512u + i * 2u + 1u] << 8u));
+            }
+            input.ringCount += 256u;
+            input.queueRead += kBlockBytes;
+        }
+        if (input.queueRead == input.queue.size() && input.queueRead != 0u)
+        {
+            input.queue.clear();
+            input.queueRead = 0u;
+        }
+    }
+
     void Spu2::step()
     {
         int32_t coreOut[2][2] = {};
@@ -425,6 +466,19 @@ namespace ps2x::iop::detail
                     left += (sample * volLeft) >> 14;
                 if ((mixRight & (1u << index)) != 0u)
                     right += (sample * volRight) >> 14;
+            }
+            // ADMA sound-data input, scaled by the core's BVOL (master block +0x0C/+0x0E).
+            InputState &input = m_input[core];
+            if (input.ringCount == 0u)
+                feedInput(core);
+            if (input.ringCount != 0u)
+            {
+                const auto &frame = input.ring[input.ringRead];
+                const uint32_t bvol = RegMvolBase + core * RegMvolStride + 0x0Cu;
+                left += (frame[0] * volumeFromRegister(reg(bvol))) >> 14;
+                right += (frame[1] * volumeFromRegister(reg(bvol + 2u))) >> 14;
+                input.ringRead = (input.ringRead + 1u) % InputFrames;
+                --input.ringCount;
             }
             coreOut[core][0] = left;
             coreOut[core][1] = right;

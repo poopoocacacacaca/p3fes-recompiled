@@ -1058,6 +1058,27 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
     if (x < ctx.scissor.x0 || x > ctx.scissor.x1 || y < ctx.scissor.y0 || y > ctx.scissor.y1)
         return;
 
+    // P3FES: fast path for the common opaque write (FMV frames, 2D UI): no fog, no blending, no FBMSK,
+    // alpha test and destination alpha test off, depth test off or ALWAYS, 32/24-bit frame. Produces
+    // the same result as the general path below; needs proper testing beyond those cases.
+    {
+        const uint64_t test = ctx.test;
+        const bool ztestEnabled = (test & 0x10000u) != 0u;
+        const uint32_t zmethod = static_cast<uint32_t>((test >> 17) & 3u);
+        const uint32_t fpsm = ctx.frame.psm;
+        if (!state.prim.fge && !state.prim.abe && ctx.frame.fbmsk == 0u && (test & 0x1u) == 0u &&
+            ((test >> 14) & 0x1u) == 0u && (!ztestEnabled || zmethod == 1u) &&
+            (fpsm == GS_PSM_CT32 || fpsm == GS_PSM_CT24))
+        {
+            const u32 fbw = std::max<u32>(ctx.frame.fbw, 1u);
+            const uint8_t outA = ((ctx.fba & 0x1ull) != 0ull && fpsm != GS_PSM_CT24) ? static_cast<uint8_t>(a | 0x80u) : a;
+            WriteVramUnlocked(fpsm, GSInternal::framePageBaseToBlock(ctx.frame.fbp), fbw, x, y, pack32(r, g, b, outA));
+            if (ztestEnabled && !ctx.zbuf.zmask)
+                WriteVramUnlocked(ctx.zbuf.psm, GSInternal::framePageBaseToBlock(ctx.zbuf.zbp), fbw, x, y, z);
+            return;
+        }
+    }
+
     if (state.prim.fge)
     {
         const uint32_t inverseFog = 256u - fog; // GOW-Port: pesos de niebla suman 256.
@@ -1269,6 +1290,32 @@ uint32_t GSCpuBackend::LookupCLUT(const GSDrawState &state,
     return 0xFFFF00FFu;
 }
 
+// Raw VRAM texel -> RGBA8888 for the texture's PSM (TEXA expansion, CLUT lookup).
+uint32_t GSCpuBackend::ConvertTexel(const GSDrawState &state, uint32_t out)
+{
+    const auto &tex = state.context.tex0;
+    switch (tex.psm)
+    {
+    case GS_PSM_CT32:
+    case GS_PSM_Z32:
+    case GS_PSM_CT24:
+    case GS_PSM_Z24:
+        return applyTexa(state.texa, tex.psm, out);
+    case GS_PSM_CT16:
+    case GS_PSM_CT16S:
+    case GS_PSM_Z16:
+    case GS_PSM_Z16S:
+        return applyTexa(state.texa, tex.psm, Rgba5551ToRgba8888(out));
+    case GS_PSM_T8:
+    case GS_PSM_T8H:
+    case GS_PSM_T4:
+    case GS_PSM_T4HL:
+    case GS_PSM_T4HH:
+        return LookupCLUT(state, static_cast<u8>(out), tex.cpsm, tex.csm, tex.csa, tex.psm);
+    }
+    return 0xFFFF00FFu;
+}
+
 uint32_t GSCpuBackend::SampleTexture(const GSDrawState &state, float s, float t, float q, uint16_t u, uint16_t v)
 {
     const auto &ctx = state.context;
@@ -1302,29 +1349,7 @@ uint32_t GSCpuBackend::SampleTexture(const GSDrawState &state, float s, float t,
         sampleU = wrapTextureCoordinate(sampleU, texW, wrapU, minU, maxU);
         sampleV = wrapTextureCoordinate(sampleV, texH, wrapV, minV, maxV);
 
-        u32 out = ReadTextureVramUnlocked(tex.psm, tex.tbp0, tex.tbw, sampleU, sampleV);
-
-        switch (tex.psm)
-        {
-        case GS_PSM_CT32:
-        case GS_PSM_Z32:
-        case GS_PSM_CT24:
-        case GS_PSM_Z24:
-            return applyTexa(state.texa, tex.psm, out);
-        case GS_PSM_CT16:
-        case GS_PSM_CT16S:
-        case GS_PSM_Z16:
-        case GS_PSM_Z16S:
-            return applyTexa(state.texa, tex.psm, Rgba5551ToRgba8888(out));
-        case GS_PSM_T8:
-        case GS_PSM_T8H:
-        case GS_PSM_T4:
-        case GS_PSM_T4HL:
-        case GS_PSM_T4HH:
-            return LookupCLUT(state, static_cast<u8>(out), tex.cpsm, tex.csm, tex.csa, tex.psm);
-        }
-
-        return 0xFFFF00FFu;
+        return ConvertTexel(state, ReadTextureVramUnlocked(tex.psm, tex.tbp0, tex.tbw, sampleU, sampleV));
     };
 
     // GOW-Port: ambos filtros convierten STQ a 16.16 (PCSX2 v2.8.2 SW).
@@ -1436,6 +1461,42 @@ void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
             v0f = (v0.t / q0) * static_cast<float>(texH);
             u1f = (v1.s / q1) * static_cast<float>(texW);
             v1f = (v1.t / q1) * static_cast<float>(texH);
+        }
+
+        // P3FES: nearest-filtered UV sprites (FMV frames, UI). Same texel selection as SampleTexture()
+        // with fst=1 (u >> 4 after the 1/16 fixed-point rounding below), with the CLAMP decode and the
+        // V coordinate hoisted out of the pixel loop. Needs proper testing beyond those cases.
+        if (state.prim.fst && !state.linearFilter)
+        {
+            const uint64_t clamp = ctx.clamp;
+            const uint8_t wrapU = static_cast<uint8_t>(clamp & 0x3u);
+            const uint8_t wrapV = static_cast<uint8_t>((clamp >> 2) & 0x3u);
+            const uint16_t minU = static_cast<uint16_t>((clamp >> 4) & 0x3FFu);
+            const uint16_t maxU = static_cast<uint16_t>((clamp >> 14) & 0x3FFu);
+            const uint16_t minV = static_cast<uint16_t>((clamp >> 24) & 0x3FFu);
+            const uint16_t maxV = static_cast<uint16_t>((clamp >> 34) & 0x3FFu);
+            for (int y = drawY0; y <= drawY1; ++y)
+            {
+                const float ty = gsSpriteParameter(axisY, y);
+                const float texVf = v0f + (v1f - v0f) * ty;
+                const int fixedV = clampInt(static_cast<int>((texVf * 16.0f) + 0.5f), 0, 0xFFFF);
+                const int sampleV = wrapTextureCoordinate(fixedV >> 4, texH, wrapV, minV, maxV);
+                for (int x = drawX0; x <= drawX1; ++x)
+                {
+                    const float tx = gsSpriteParameter(axisX, x);
+                    const float texUf = u0f + (u1f - u0f) * tx;
+                    const int fixedU = clampInt(static_cast<int>((texUf * 16.0f) + 0.5f), 0, 0xFFFF);
+                    const int sampleU = wrapTextureCoordinate(fixedU >> 4, texW, wrapU, minU, maxU);
+                    const uint32_t texel = ConvertTexel(state, ReadTextureVramUnlocked(tex.psm, tex.tbp0, tex.tbw, sampleU, sampleV));
+                    const TextureCombineResult color = combineTexture(tex, r, g, b, a,
+                                                                      static_cast<uint8_t>(texel & 0xFF),
+                                                                      static_cast<uint8_t>((texel >> 8) & 0xFF),
+                                                                      static_cast<uint8_t>((texel >> 16) & 0xFF),
+                                                                      static_cast<uint8_t>((texel >> 24) & 0xFF));
+                    WritePixel(state, x, y, z1, color.r, color.g, color.b, color.a, v1.fog);
+                }
+            }
+            return;
         }
 
         for (int y = drawY0; y <= drawY1; ++y)

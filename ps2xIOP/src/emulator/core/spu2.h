@@ -3,7 +3,8 @@
 // GOW-Port: emulacion del SPU2 (dos nucleos de 24 voces, 2 MB de RAM de sonido).
 // Fase 1: registros, RAM, transferencias manuales y DMA, voces ADPCM con tono, ADSR, volumen fijo y mezcla seca,
 // ENDX/ENVX/NAX legibles e interrupcion por IRQA. Fase 2: la mezcla sale por el audio del host (ps2_runtime.cpp).
-// Pendiente: reverb, barrido de volumen e interpolacion gaussiana y ADMA.
+// Pendiente: reverb, barrido de volumen e interpolacion gaussiana.
+// P3FES: AutoDMA (ADMA) sound-data input, used by CRI ADX for streamed music and movie audio.
 // Referencias: PCSX2 (pcsx2/SPU2) y la documentacion "psx-spx" del SPU (ADPCM y ADSR son iguales que en la PS1).
 
 #include <array>
@@ -52,7 +53,8 @@ namespace ps2x::iop::detail
         void writeRam(uint32_t halfwordAddress, uint16_t value) noexcept;
 
         // DMA del IOP (canales 4 y 7). Copia bytes desde/hacia la RAM del IOP en la TSA del nucleo y la avanza.
-        // Devuelve false (sin copiar nada) si el nucleo esta en modo ADMA, que aun no esta emulado.
+        // In ADMA mode (ADMAS bit of the core set) a write queues the bytes as sound-data input instead:
+        // 512-byte blocks of 256 left samples followed by 256 right samples, consumed at 48 kHz.
         bool dmaWrite(uint32_t core, const uint8_t *source, size_t bytes);
         bool dmaRead(uint32_t core, uint8_t *destination, size_t bytes);
         void markDmaReady(uint32_t core) noexcept;
@@ -108,6 +110,20 @@ namespace ps2x::iop::detail
         int32_t stepVoice(uint32_t core, uint32_t voice);
         void stepEnvelope(uint32_t core, uint32_t voice);
         void checkIrqAddress(uint32_t halfwordAddress) noexcept;
+
+        void feedInput(uint32_t core);
+
+        // ADMA sound-data input per core: queued PCM bytes and a ring of decoded stereo frames.
+        static constexpr uint32_t InputFrames = 512u;
+        struct InputState
+        {
+            std::vector<uint8_t> queue;
+            size_t queueRead = 0;
+            std::array<std::array<int16_t, 2>, InputFrames> ring{};
+            uint32_t ringRead = 0;
+            uint32_t ringCount = 0;
+        };
+        std::array<InputState, 2> m_input{};
 
         std::vector<uint16_t> m_ram;
         std::array<uint16_t, 0x400> m_regs{};
