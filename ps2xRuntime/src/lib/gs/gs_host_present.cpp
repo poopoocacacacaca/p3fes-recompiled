@@ -2,6 +2,7 @@
 #include "runtime/gs/gs_host_present.h"
 #include "runtime/gs/gs_host_present_diag.h" // window without extra GPU reads.
 #include "runtime/gs/gs_frontend.h"
+#include "runtime/gs/gs_pcsx2.h"
 #include "runtime/ps2_perf.h"
 #include "ps2_log.h"
 
@@ -13,6 +14,22 @@
 
 namespace
 {
+    // PS2X_GS_RENDERER=pcsx2: the field PCSX2 presented, read back and shown as is.
+    struct Pcsx2View
+    {
+        Texture2D texture{};
+        std::vector<uint8_t> rgba;
+        uint32_t width = 0u, height = 0u;
+        uint64_t serial = 0u;
+    } s_pcsx2;
+
+    void releasePcsx2View()
+    {
+        if (s_pcsx2.texture.id != 0u)
+            UnloadTexture(s_pcsx2.texture);
+        s_pcsx2 = {};
+    }
+
     constexpr uint32_t kWidth = 640u;
     constexpr uint32_t kHeight = 512u;
     constexpr uint32_t kDisplayHeight = 448u;
@@ -71,6 +88,40 @@ void GSHostPresentation::blankFallback()
 GSHostPresentation::View GSHostPresentation::prepare(GS &gs, uint64_t vsyncTick)
 {
     createFallback();
+    if (ps2_pcsx2gs::Active())
+    {
+        uint32_t w = 0u, h = 0u;
+        if (ps2_pcsx2gs::CopyLatestFrame(s_pcsx2.rgba, w, h, s_pcsx2.serial))
+        {
+            if (s_pcsx2.texture.id == 0u || w != s_pcsx2.width || h != s_pcsx2.height)
+            {
+                if (s_pcsx2.texture.id != 0u)
+                    UnloadTexture(s_pcsx2.texture);
+                Image image{s_pcsx2.rgba.data(), static_cast<int>(w), static_cast<int>(h), 1,
+                            PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+                s_pcsx2.texture = LoadTextureFromImage(image);
+                SetTextureFilter(s_pcsx2.texture, TEXTURE_FILTER_BILINEAR);
+                s_pcsx2.width = w;
+                s_pcsx2.height = h;
+            }
+            else
+            {
+                UpdateTexture(s_pcsx2.texture, s_pcsx2.rgba.data());
+            }
+        }
+        if (s_pcsx2.texture.id != 0u)
+        {
+            current = {};
+            current.texture = s_pcsx2.texture;
+            current.width = s_pcsx2.width;
+            current.height = s_pcsx2.height;
+            current.borrowed = true; // owned here, not by `fallback`
+            current.blank = false;
+            return current;
+        }
+        blankFallback();
+        return current;
+    }
     const bool shared = gs.usesSharedPresentation() && GSSharedPresent::Active();
     if (!modeKnown || shared != sharedMode)
     {
@@ -202,9 +253,10 @@ GSHostPresentation::View GSHostPresentation::renderFrame(GS &gs, uint64_t vsyncT
     const float sourceHeight = static_cast<float>(std::max<uint32_t>(1u, selected.height));
     const float screenWidth = static_cast<float>(GetScreenWidth());
     const float screenHeight = static_cast<float>(GetScreenHeight());
-    const float scale = std::min(screenWidth / sourceWidth, screenHeight / sourceHeight);
-    const float destinationWidth = sourceWidth * scale;
-    const float destinationHeight = sourceHeight * scale;
+    // PCSX2's read-back field is in GS pixels (320 or 512 wide modes are common); the TV showed it at 4:3.
+    const float aspect = ps2_pcsx2gs::Active() ? 4.0f / 3.0f : sourceWidth / sourceHeight;
+    const float destinationHeight = std::min(screenHeight, screenWidth / aspect);
+    const float destinationWidth = destinationHeight * aspect;
     const Rectangle source{0.0f, 0.0f, sourceWidth, sourceHeight};
     const Rectangle destination{(screenWidth - destinationWidth) * 0.5f,
                                 (screenHeight - destinationHeight) * 0.5f,
@@ -222,6 +274,8 @@ GSHostPresentation::View GSHostPresentation::renderFrame(GS &gs, uint64_t vsyncT
 
 void GSHostPresentation::shutdown(GS &gs)
 {
+    ps2_pcsx2gs::Shutdown(); // stops feeding PCSX2 before the GS back end goes away
+    releasePcsx2View();
     if (!started && fallback.id == 0u)
         return;
     // nullptr creates the CPU backend; drains and destroys the worker/shared context.

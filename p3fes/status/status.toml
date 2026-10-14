@@ -145,15 +145,15 @@ done = 1.0
 [[phase]]
 name = "Movies"
 weight = 10
-done = 0.7
+done = 0.85
 [[phase]]
 name = "Renderer"
 weight = 15
-done = 0.2
+done = 0.45
 [[phase]]
 name = "Title"
 weight = 10
-done = 0.0
+done = 0.5
 [[phase]]
 name = "Field / Tartarus"
 weight = 15

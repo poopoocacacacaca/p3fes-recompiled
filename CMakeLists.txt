@@ -82,6 +82,11 @@ endif()
 if(PS2X_BUILD_RUNTIME)
     add_subdirectory("ps2xIOP")
     add_subdirectory("ps2xRuntime")
+    # PCSX2's GS as pcsx2gs.so / pcsx2gs.dll next to the executable (PS2X_GS_RENDERER=pcsx2).
+    option(PS2X_BUILD_PCSX2GS "Build PCSX2's GS as a shared library" ON)
+    if(PS2X_BUILD_PCSX2GS AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+        add_subdirectory("third_party/pcsx2-gs")
+    endif()
 endif()
 
 if(PS2X_BUILD_ANALYZER)

@@ -2069,11 +2069,17 @@ void EeScheduler::processDueDeadlines()
         {
             if (scheduled.event.type == EeEventType::VBlankStart)
             {
+                // Pace against the host clock, but never "catch up": after a stretch slower than real time
+                // (loading, a heavy scene), restart the schedule from now instead of running fields back to back.
+                auto hostBase = scheduled.hostDeadline;
+                const auto hostNow = std::chrono::steady_clock::now();
+                if (hostBase + 2 * kVBlankPeriod < hostNow)
+                    hostBase = hostNow;
                 scheduleEvent(scheduled.deadlineCycle + kVBlankDurationCycles,
-                              scheduled.hostDeadline + kVBlankDuration,
+                              hostBase + kVBlankDuration,
                               EeEvent{EeEventType::VBlankEnd, 0, m_vsyncTick + 1u});
                 scheduleEvent(scheduled.deadlineCycle + kVBlankPeriodCycles,
-                              scheduled.hostDeadline + kVBlankPeriod,
+                              hostBase + kVBlankPeriod,
                               EeEvent{EeEventType::VBlankStart, 0, 0});
             }
             processEvent(scheduled.event);

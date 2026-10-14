@@ -1,4 +1,5 @@
 #include "ps2_runtime.h"
+#include "runtime/gs/gs_pcsx2.h"
 #include "runtime/gs/gs_host_present.h" // the host's private consumer.
 #include "ps2_log.h"
 #include "runtime/ps2_perf.h"
@@ -696,6 +697,8 @@ bool PS2Runtime::syncCoreSubsystems()
     }
 
     m_gs.init(gsVram, static_cast<uint32_t>(PS2_GS_VRAM_SIZE), &m_memory.gs());
+    if (ps2_pcsx2gs::Requested())
+        ps2_pcsx2gs::Install(m_gs);
     // each stream keeps its GIF cursor, even when another PATH interrupts it.
     m_gifArbiter.reset();
     m_gifArbiter.setProcessPathPacketFn([this](GifPathId path, const uint8_t *data, uint32_t size)

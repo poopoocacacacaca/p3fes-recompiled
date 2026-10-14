@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="p3fes/branding/recompiled.svg" alt="RECOMPILED: PS2 static recompilation, native PC port" width="100%">
+
 # Persona 3 FES · PS2 Static Recompilation
 
 **A native PC port of *Shin Megami Tensei: Persona 3 FES* (NTSC-U `SLUS-21621`).**<br>
@@ -28,7 +30,7 @@ The game's MIPS R5900 code is statically recompiled to C++ and run on a reimplem
 
 <sub>Generated from <a href="p3fes/status/status.toml"><code>p3fes/status/status.toml</code></a> by <code>p3fes/scripts/status_chart.py</code>. 🟩 working · 🟦 partial · 🟥 pending.</sub>
 
-**Where it stands:** the game boots from its own CVM archives and detects the memory card and controller. It shows the ATLUS and CRI logos and plays the opening movie with sound. The movie runs at about 0.4× speed because the built-in software rasterizer is the bottleneck, so PCSX2's GS is being wired in as the renderer. Next up: the title screen.
+**Where it stands:** the game boots from its own CVM archives, detects the memory card and controller, plays the opening movie with sound through PCSX2's GS, and reaches the title screen and the *The Journey* / *The Answer* menu. The menu background is still corrupted, and the 2-core test VM runs at about 0.75× speed with the EE/IOP thread as the bottleneck. Next up: the menu background, then New Game.
 
 | Milestone | |
 |---|:---:|
@@ -36,8 +38,10 @@ The game's MIPS R5900 code is statically recompiled to C++ and run on a reimplem
 | Boot: EE kernel, original IRX modules, CVM archives | ✅ |
 | Memory card (8 MB `.ps2`) and controller | ✅ |
 | Opening movie: video (IPU) and audio (ADX over SPU2 AutoDMA) | ✅ |
-| Movies at full speed (PCSX2 GS renderer) | 🔧 |
-| Title screen and menus | 🔧 |
+| PCSX2 GS renderer (OpenGL / software) | ✅ |
+| Movies at full speed | 🔧 |
+| Title screen | ✅ |
+| Menus (*The Journey* / *The Answer* background) | 🔧 |
 | Field, Tartarus, battles, events | ⏳ |
 | Widescreen, upscaling, 60 FPS | ⏳ |
 
@@ -127,7 +131,9 @@ See [`p3fes/README.md`](p3fes/README.md). In short:
 | Variable | Effect |
 |---|---|
 | `PS2X_CALLBACK_STACK_TOP=0x100000` | Required: keeps interrupt/callback stacks clear of the main stack |
-| `PS2X_GS_RENDERER=pcsx2` / `pcsx2-sw` | PCSX2's GS, hardware (OpenGL) or software renderer (in progress) |
+| `PS2X_GS_RENDERER=pcsx2` / `pcsx2-sw` | PCSX2's GS, hardware (OpenGL) or software renderer (`pcsx2gs.so`/`.dll` next to the executable) |
+| `PS2X_PCSX2_SCALE=2` | PCSX2 internal resolution multiplier |
+| `PS2X_PCSX2_OPTIONS=` | PCSX2 image options, `key=value;…` (see `third_party/pcsx2-gs/include/pcsx2gs_api.h`) |
 | `PS2X_GS_GPU=1` | Built-in OpenGL GS backend instead of the CPU rasterizer |
 | `PS2X_GS_THREAD=1` | Run the GS backend on its own thread |
 | `PS2X_MEMCARD1=<path>` / `none` | Memory card for slot 1 (default `memcards/Mcd001.ps2`) |

@@ -1,9 +1,12 @@
 // PCSX2's GS as the port's renderer; see include/runtime/gs/gs_pcsx2.h.
 #include "runtime/gs/gs_pcsx2.h"
 #include "runtime/gs/gs_frontend.h"
+#include "runtime/gs/gs_cpu_backend.h"
+#include "runtime/gs/gs_threaded_backend.h"
 #include "runtime/ps2_memory.h"
 #include "pcsx2gs_api.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -256,6 +259,20 @@ namespace
             const uint32_t *pixels = nullptr;
             if (!m_api->frame(&w, &h, &pixels) || !pixels || !w || !h)
                 return;
+            if (w != m_frameWidth || h != m_frameHeight)
+                std::fprintf(stderr, "[pcsx2-gs] presented field %ux%u\n", w, h);
+            if (m_statsEnabled)
+            {
+                ++m_statFields;
+                const auto now = std::chrono::steady_clock::now();
+                const double secs = std::chrono::duration<double>(now - m_statStart).count();
+                if (secs >= 5.0)
+                {
+                    std::fprintf(stderr, "[pcsx2-gs] %.1f fields/s\n", m_statFields / secs);
+                    m_statFields = 0;
+                    m_statStart = now;
+                }
+            }
             std::lock_guard<std::mutex> lock(m_frameMutex);
             m_frame.resize(static_cast<size_t>(w) * h * 4u);
             std::memcpy(m_frame.data(), pixels, m_frame.size());
@@ -283,6 +300,9 @@ namespace
         std::vector<uint8_t> m_frame;
         uint32_t m_frameWidth = 0, m_frameHeight = 0;
         uint64_t m_frameSerial = 0;
+        bool m_statsEnabled = std::getenv("PS2X_PCSX2_STATS") != nullptr;
+        uint32_t m_statFields = 0;
+        std::chrono::steady_clock::time_point m_statStart = std::chrono::steady_clock::now();
     };
 
     std::shared_ptr<Pcsx2Renderer> g_renderer;
@@ -339,6 +359,18 @@ namespace ps2_pcsx2gs
         }
         g_renderer = r;
         g_gs = &gs;
+        // The built-in rasterizer keeps tracking GS state and local memory (for local -> host reads) but stops
+        // drawing, which was the movie's bottleneck. PS2X_PCSX2_KEEP_INTERNAL=1 keeps it drawing (comparisons).
+        const char *keep = std::getenv("PS2X_PCSX2_KEEP_INTERNAL");
+        if (!(keep && *keep == '1'))
+        {
+#if defined(_WIN32)
+            _putenv_s("PS2X_GS_DISCARD_DRAWS", "1");
+#else
+            setenv("PS2X_GS_DISCARD_DRAWS", "1", 1);
+#endif
+            gs.setRasterBackend(std::make_unique<GSThreadedBackend>(std::make_unique<GSCpuBackend>()));
+        }
         gs.setExternalObserver(r);
         g_active = true;
         std::fprintf(stderr, "[pcsx2-gs] attached (%s renderer)\n", renderer ? "software" : "hardware");

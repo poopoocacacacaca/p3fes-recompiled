@@ -385,6 +385,7 @@ add_library(ps2_runtime STATIC
     src/lib/gs/gs_frontend.cpp
     src/lib/gs/gs_host_present.cpp # same texture consumer for the game and the controls.
     src/lib/gs/gs_host_acquired_capture.cpp # optional, bounded download of Acquire.
+    src/lib/gs/gs_pcsx2.cpp # PCSX2's GS (third_party/pcsx2-gs), loaded at run time
     src/lib/gs/gs_cpu_backend.cpp
     # OpenGL GS backend and command queue from the SotC fork ac9efa0 (GPL-3.0).
     src/lib/gs/gs_threaded_backend.cpp
@@ -530,7 +531,10 @@ target_include_directories(ps2_runtime PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel
 )
 
-target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ffmpeg ps2_iop)
+target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ffmpeg ps2_iop ${CMAKE_DL_LIBS})
+# Only gs_pcsx2.cpp sees the PCSX2 GS C API, so the rest of the runtime keeps its compile flags.
+set_source_files_properties(src/lib/gs/gs_pcsx2.cpp PROPERTIES
+    INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/pcsx2-gs/include")
 if(WIN32)
     # The GS thread's own WGL context.
     target_link_libraries(ps2_runtime PRIVATE opengl32 gdi32)
