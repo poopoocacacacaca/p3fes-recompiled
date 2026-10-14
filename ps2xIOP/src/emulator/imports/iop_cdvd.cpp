@@ -7,6 +7,8 @@
 #include "ps2x/iop/ps2_path.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <array>
 #include <cctype>
 #include <cstring>
@@ -15,8 +17,23 @@
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#include <chrono>
 #include <utility>
 #include <vector>
+
+namespace
+{
+    // Debug aid: PS2X_IOP_CD_LOG=1 logs the virtual disc layout and IOP sector reads.
+    bool iopCdLogEnabled()
+    {
+        static const bool enabled = []()
+        {
+            const char *env = std::getenv("PS2X_IOP_CD_LOG");
+            return env && *env && *env != '0';
+        }();
+        return enabled;
+    }
+}
 
 namespace ps2x::iop::detail
 {
@@ -228,7 +245,18 @@ namespace ps2x::iop::detail
                 return true;
 
             case 6: // sceCdRead
-                if (readSectors(a0, a1, a2))
+            {
+                const bool readOk = readSectors(a0, a1, a2);
+                if (iopCdLogEnabled())
+                {
+                    {
+                        static const auto t0 = std::chrono::steady_clock::now();
+                        const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+                        std::fprintf(stderr, "[iop-cd] t=%.2f sceCdRead lsn=0x%X sectors=0x%X dest=0x%X ok=%d\n", secs, a0, a1, a2, readOk ? 1 : 0);
+                    }
+                    std::fflush(stderr);
+                }
+                if (readOk)
                 {
                     signalCommandComplete();
                     if (callback.address != 0u)
@@ -244,6 +272,7 @@ namespace ps2x::iop::detail
                 else
                     cpu.gpr[2] = 0u;
                 return true;
+            }
 
             case 7: // sceCdSeek
                 currentLsn = a0;
@@ -493,6 +522,15 @@ namespace ps2x::iop::detail
                 cursor += node.sectors;
             }
             volumeSectors = std::max<uint32_t>(cursor, 32u);
+            if (iopCdLogEnabled())
+            {
+                for (const IsoNode &n : nodes)
+                {
+                    if (!n.directory)
+                        std::fprintf(stderr, "[iop-cd] layout %s lsn=0x%X sectors=0x%X\n", n.identifier.c_str(), n.lsn, n.sectors);
+                }
+                std::fflush(stderr);
+            }
 
             std::array<uint8_t, kSectorSize> primary{};
             primary[0] = 1u;

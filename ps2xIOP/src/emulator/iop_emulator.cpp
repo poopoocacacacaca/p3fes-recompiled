@@ -8,6 +8,7 @@
 #include "core/iop_kernel.h"
 #include "imports/iop_loadcore.h"
 #include "core/iop_memory.h"
+#include "core/iop_sio2.h"
 #include "services/iop_module_loader.h"
 #include "services/iop_rpc.h"
 #include "imports/iop_stdio.h"
@@ -19,6 +20,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
+#include <filesystem>
 #include <map>
 #include <optional>
 #include <span>
@@ -176,8 +179,34 @@ namespace ps2x::iop::detail
 
         void schedulePendingDma()
         {
-            if (const auto dma = memory.takeDmaStart())
+            while (const auto dma = memory.takeDmaStart())
                 pendingDmaInterrupts[dma->irq] = totalCycles + dma->delayCycles;
+        }
+
+        // Memory card images for the emulated SIO2 bus. PCSX2-compatible raw
+        // .ps2 files: <elf dir>/memcards/Mcd001.ps2 (created on first run)
+        // and Mcd002.ps2 (only if present). Override with PS2X_MEMCARD1 /
+        // PS2X_MEMCARD2, or set PS2X_MEMCARD1=none to boot without a card.
+        void configureMemoryCards()
+        {
+            if (memoryCardsConfigured)
+                return;
+            memoryCardsConfigured = true;
+            const std::filesystem::path base = std::filesystem::path(host.hostPath(HostPathKind::ElfDirectory)) / "memcards";
+            auto choose = [&](const char *env, const char *fallback) -> std::filesystem::path
+            {
+                if (const char *value = std::getenv(env); value && *value)
+                {
+                    if (std::string_view(value) == "none")
+                        return {};
+                    return std::filesystem::path(value);
+                }
+                return base / fallback;
+            };
+            memory.sio2().configureCards(choose("PS2X_MEMCARD1", "Mcd001.ps2"),
+                                         choose("PS2X_MEMCARD2", "Mcd002.ps2"),
+                                         [this](std::string_view text)
+                                         { log(LogLevel::Info, text); });
         }
 
         bool readRam(uint32_t address, void *destination, size_t size) const
@@ -237,8 +266,96 @@ namespace ps2x::iop::detail
             Missing,
         };
 
+        // PS2X_IOP_TRACE_PC=addr[,addr...] logs registers (and a few stack words)
+        // whenever IOP execution reaches one of those addresses.
+        void traceBreakpoint(const CpuState &cpu)
+        {
+            static const std::vector<uint32_t> points = []()
+            {
+                std::vector<uint32_t> out;
+                const char *env = std::getenv("PS2X_IOP_TRACE_PC");
+                if (!env)
+                    return out;
+                std::string all(env);
+                size_t pos = 0u;
+                while (pos < all.size())
+                {
+                    const size_t comma = all.find(',', pos);
+                    out.push_back(static_cast<uint32_t>(std::strtoul(all.substr(pos, comma - pos).c_str(), nullptr, 16)));
+                    if (comma == std::string::npos)
+                        break;
+                    pos = comma + 1u;
+                }
+                return out;
+            }();
+            if (points.empty() || std::find(points.begin(), points.end(), cpu.pc) == points.end())
+                return;
+            std::ostringstream out;
+            out << "[iop-bp] pc=" << std::hex << cpu.pc << " a0=" << cpu.gpr[4] << " a1=" << cpu.gpr[5]
+                << " a2=" << cpu.gpr[6] << " a3=" << cpu.gpr[7] << " ra=" << cpu.gpr[31] << " sp=" << cpu.gpr[29]
+                << " stk:";
+            for (int i = 4; i < 8; ++i)
+                out << ' ' << memory.read32(cpu.gpr[29] + i * 4u);
+            out << " cyc=" << std::dec << totalCycles;
+            log(LogLevel::Info, out.str());
+        }
+
+        // PS2X_IOP_IMPORT_LOG=lib1,lib2 traces calls into those IOP libraries.
+        bool importTraced(std::string_view library) const
+        {
+            static const std::string filter = []()
+            {
+                const char *env = std::getenv("PS2X_IOP_IMPORT_LOG");
+                std::string value = env ? env : "";
+                for (char &ch : value)
+                    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                return value.empty() ? value : "," + value + ",";
+            }();
+            if (filter.empty())
+                return false;
+            std::string key = "," + std::string(library) + ",";
+            for (char &ch : key)
+                ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            return filter == ",all," || filter.find(key) != std::string::npos;
+        }
+
         ImportDisposition dispatchImport(const IopImportCall &call, CpuState &cpu)
         {
+            if (importTraced(call.library))
+            {
+                std::ostringstream out;
+                out << "[iop-import] " << call.library << ':' << std::dec << call.ordinal << std::hex
+                    << " a0=" << cpu.gpr[4] << " a1=" << cpu.gpr[5] << " a2=" << cpu.gpr[6]
+                    << " a3=" << cpu.gpr[7] << " ra=" << cpu.gpr[31] << " cyc=" << std::dec << totalCycles;
+                if (std::getenv("PS2X_IOP_IMPORT_DUMP"))
+                {
+                    for (int reg = 4; reg <= 6; ++reg)
+                    {
+                        const uint32_t ptr = cpu.gpr[reg];
+                        if (physicalAddress(ptr) < kRamSize && ptr >= 0x1000u)
+                        {
+                            out << "\n    [a" << (reg - 4) << "] " << std::hex;
+                            static const int words = []()
+                            {
+                                const char *env = std::getenv("PS2X_IOP_IMPORT_DUMP");
+                                const int value = env ? std::atoi(env) : 0;
+                                return value > 1 ? std::min(value, 256) : 12;
+                            }();
+                            for (int w = 0; w < words; ++w)
+                                out << memory.read32(ptr + w * 4u) << ' ';
+                        }
+                    }
+                    if (iequals(call.library, "sifman") && call.ordinal == 7u)
+                    {
+                        const uint32_t src = memory.read32(cpu.gpr[4]);
+                        const uint32_t size = memory.read32(cpu.gpr[4] + 8u);
+                        out << "\n    [src " << std::hex << src << "]";
+                        for (uint32_t w = 0; w < std::min<uint32_t>(size, 0x80u) / 4u; ++w)
+                            out << ' ' << memory.read32(src + w * 4u);
+                    }
+                }
+                log(LogLevel::Info, out.str());
+            }
             const uint32_t a0 = cpu.gpr[4];
             auto setV0 = [&](uint32_t value)
             {
@@ -304,6 +421,19 @@ namespace ps2x::iop::detail
                     secrMcDevIdHandler = {a0, cpu.gpr[28]};
                     setV0(0);
                     return ImportDisposition::Handled;
+                case 6: // SecrAuthCard(port, slot, cnum): the MagicGate handshake
+                        // needs MechaCon crypto; report success like an HLE BIOS.
+                    if (std::getenv("PS2X_SIO2_LOG"))
+                    {
+                        std::ostringstream out;
+                        out << "[secrman] SecrAuthCard port=" << a0 << " slot=" << cpu.gpr[5] << " cnum=" << cpu.gpr[6];
+                        log(LogLevel::Info, out.str());
+                    }
+                    setV0(1);
+                    return ImportDisposition::Handled;
+                case 7: // SecrResetAuthCard
+                    setV0(0);
+                    return ImportDisposition::Handled;
                 default:
                     break;
                 }
@@ -328,6 +458,35 @@ namespace ps2x::iop::detail
                 return ImportDisposition::Handled;
             if (iequals(call.library, "dmacman"))
             {
+                // Only the SIO2 channels are emulated; other channels keep the
+                // previous "accept and do nothing" behaviour.
+                switch (call.ordinal)
+                {
+                case 28: // dmac_request(channel, addr, size, count, dir)
+                    if (a0 == 11u || a0 == 12u)
+                    {
+                        const uint32_t base = 0x1F801500u + (a0 - 7u) * 0x10u;
+                        const uint32_t dir = memory.read32(cpu.gpr[29] + 16u) & 1u;
+                        memory.write32(base + 0u, cpu.gpr[5] & 0x00FFFFFFu);
+                        memory.write32(base + 4u, (cpu.gpr[7] << 16u) | (cpu.gpr[6] & 0xFFFFu));
+                        memory.write32(base + 8u, a0 == 11u ? (0x200u | dir) : (0x40000200u | dir));
+                        setV0(1u);
+                        return ImportDisposition::Handled;
+                    }
+                    break;
+                case 32: // dmac_transfer(channel)
+                    if (a0 == 11u || a0 == 12u)
+                    {
+                        const uint32_t chcr = 0x1F801500u + (a0 - 7u) * 0x10u + 8u;
+                        memory.write32(chcr, memory.read32(chcr) | 0x01000000u);
+                        schedulePendingDma();
+                        setV0(0u);
+                        return ImportDisposition::Handled;
+                    }
+                    break;
+                default:
+                    break;
+                }
                 setV0(0);
                 return ImportDisposition::Handled;
             }
@@ -390,6 +549,8 @@ namespace ps2x::iop::detail
                 return !cpu.stopped;
             }
 
+            memory.setTracePc(cpu.pc);
+            traceBreakpoint(cpu);
             const bool running = cpuCore.executeInstruction(cpu);
             schedulePendingDma();
             ++totalInstructions;
@@ -591,6 +752,7 @@ namespace ps2x::iop::detail
         ModuleLoadResult loadImage(std::string path, std::span<const uint8_t> image, const void *arguments, uint32_t argumentSize)
         {
             ModuleLoadResult result{true, -1, -1};
+            configureMemoryCards();
             const IopImageLoadResult loaded = IopModuleLoader::load(image, memory, moduleCursor);
             moduleCursor = loaded.nextModuleCursor;
             if (!loaded)
@@ -706,6 +868,7 @@ namespace ps2x::iop::detail
         std::string lastError;
         bool servicingDmaInterrupts = false;
         bool servicingGuestCallbacks = false;
+        bool memoryCardsConfigured = false;
         uint32_t callDepth = 0u;
         GuestCallback secrMcCommandHandler;
         GuestCallback secrMcDevIdHandler;

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -10,6 +11,8 @@
 
 namespace ps2x::iop::detail
 {
+    class IopSio2;
+
     class IopMemory
     {
     public:
@@ -38,6 +41,9 @@ namespace ps2x::iop::detail
         };
 
         IopMemory();
+        ~IopMemory();
+        IopMemory(const IopMemory &) = delete;
+        IopMemory &operator=(const IopMemory &) = delete;
 
         void reset();
 
@@ -68,6 +74,11 @@ namespace ps2x::iop::detail
         void setInterruptControl(uint32_t value) noexcept { m_interruptControl = value & 1u; }
 
         [[nodiscard]] std::optional<DmaStart> takeDmaStart() noexcept;
+        [[nodiscard]] IopSio2 &sio2() const noexcept { return *m_sio2; }
+        void setTracePc(uint32_t pc) noexcept { m_tracePc = pc; }
+        [[nodiscard]] uint32_t tracePc() const noexcept { return m_tracePc; }
+        // Run an SIO2 DMA (channel 11 or 12) using the channel's MADR/BCR registers.
+        void runSio2Dma(int channel);
         [[nodiscard]] std::span<const uint8_t> ram() const noexcept { return m_ram; }
 
         [[nodiscard]] static uint32_t physicalAddress(uint32_t address) noexcept;
@@ -86,6 +97,8 @@ namespace ps2x::iop::detail
         uint32_t m_interruptStatus = 0;
         uint32_t m_interruptMask = 0;
         uint32_t m_interruptControl = 1;
-        std::optional<DmaStart> m_dmaStart;
+        std::vector<DmaStart> m_dmaStarts;
+        std::unique_ptr<IopSio2> m_sio2;
+        uint32_t m_tracePc = 0u;
     };
 }

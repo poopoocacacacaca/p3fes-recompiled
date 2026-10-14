@@ -1,6 +1,9 @@
 #include "iop_memory.h"
+#include "iop_sio2.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace ps2x::iop::detail
@@ -12,6 +15,12 @@ namespace ps2x::iop::detail
         constexpr uint32_t kDmaStart = 1u << 24u;
         constexpr int kDmaSpu0Irq = 0x24;
         constexpr int kDmaSpu1Irq = 0x28;
+        constexpr uint32_t kDmaSio2InMadr = 0x1F801540u;
+        constexpr uint32_t kDmaSio2InChcr = 0x1F801548u;
+        constexpr uint32_t kDmaSio2OutMadr = 0x1F801550u;
+        constexpr uint32_t kDmaSio2OutChcr = 0x1F801558u;
+        constexpr uint64_t kSio2IrqDelayCycles = 64u;
+        constexpr uint64_t kSio2DmaIrqDelayCycles = 32u;
 
         uint32_t alignUp(uint32_t value, uint32_t alignment)
         {
@@ -20,10 +29,12 @@ namespace ps2x::iop::detail
     }
 
     IopMemory::IopMemory()
-        : m_ram(RamSize), m_owned(RamSize), m_scratch(ScratchSize)
+        : m_ram(RamSize), m_owned(RamSize), m_scratch(ScratchSize), m_sio2(std::make_unique<IopSio2>())
     {
         reset();
     }
+
+    IopMemory::~IopMemory() = default;
 
     void IopMemory::reset()
     {
@@ -36,7 +47,8 @@ namespace ps2x::iop::detail
         m_interruptStatus = 0;
         m_interruptMask = 0;
         m_interruptControl = 1;
-        m_dmaStart.reset();
+        m_dmaStarts.clear();
+        m_sio2->reset();
     }
 
     uint32_t IopMemory::physicalAddress(uint32_t address) noexcept
@@ -51,6 +63,8 @@ namespace ps2x::iop::detail
             return m_ram[phys];
         if (phys >= ScratchBase && phys < ScratchBase + ScratchSize)
             return m_scratch[phys - ScratchBase];
+        if (phys == IopSio2::DataOutAddress)
+            return m_sio2->readData();
         const uint32_t value = readHardware32(phys & ~3u);
         return static_cast<uint8_t>(value >> ((phys & 3u) * 8u));
     }
@@ -103,6 +117,14 @@ namespace ps2x::iop::detail
         if (phys >= ScratchBase && phys < ScratchBase + ScratchSize)
         {
             m_scratch[phys - ScratchBase] = value;
+            return;
+        }
+        if (phys == IopSio2::DataInAddress)
+        {
+            static const bool pioLog = std::getenv("PS2X_SIO2_PIO_LOG") != nullptr;
+            if (pioLog)
+                std::fprintf(stderr, "[sio2-pio] pc=%08X byte=%02X\n", m_tracePc, value);
+            m_sio2->writeData(value);
             return;
         }
         const uint32_t aligned = phys & ~3u;
@@ -213,6 +235,8 @@ namespace ps2x::iop::detail
 
     uint32_t IopMemory::readHardware32(uint32_t address) const
     {
+        if (IopSio2::isRegister(address))
+            return m_sio2->read32(address);
         const auto value = m_hardware.find(address);
         if (value != m_hardware.end())
             return value->second;
@@ -246,7 +270,22 @@ namespace ps2x::iop::detail
             break;
         }
 
+        if (IopSio2::isRegister(address))
+        {
+            static const bool pioLog = std::getenv("PS2X_SIO2_PIO_LOG") != nullptr;
+            if (pioLog)
+                std::fprintf(stderr, "[sio2-reg] pc=%08X %08X <- %08X\n", m_tracePc, address, value);
+            if (m_sio2->write32(address, value))
+                m_dmaStarts.push_back(DmaStart{IopSio2::Irq, kSio2IrqDelayCycles});
+            return;
+        }
+
         m_hardware[address] = value;
+        if ((address == kDmaSio2InChcr || address == kDmaSio2OutChcr) && (value & kDmaStart) != 0u)
+        {
+            runSio2Dma(address == kDmaSio2InChcr ? 11 : 12);
+            return;
+        }
         if ((address != kDmaSpu0Chcr && address != kDmaSpu1Chcr) || (value & kDmaStart) == 0u)
             return;
 
@@ -269,16 +308,56 @@ namespace ps2x::iop::detail
         const uint32_t wordsPerBlock = std::max<uint32_t>(blockControl & 0xFFFFu, 1u);
         const uint32_t blockCount = std::max<uint32_t>(blockControl >> 16u, 1u);
         const uint64_t transferWords = static_cast<uint64_t>(wordsPerBlock) * blockCount;
-        m_dmaStart = DmaStart{
+        static const bool dmaLog = std::getenv("PS2X_IOP_DMA_LOG") != nullptr;
+        if (dmaLog)
+        {
+            uint32_t admas = 0u;
+            if (const auto it = m_hardware.find(0x1F9001B0u + (secondCore ? 0x400u : 0u)); it != m_hardware.end())
+                admas = it->second;
+            std::fprintf(stderr, "[iop-dma] spu core%d chcr=%08X bcr=%08X words=%llu admas=%08X\n",
+                         secondCore ? 1 : 0, value, blockControl, static_cast<unsigned long long>(transferWords), admas);
+        }
+        // In AutoDMA (ADMA) mode the SPU2 pulls the stream at the 48 kHz output
+        // rate (one 32-bit word = one stereo sample = 768 IOP cycles), so the
+        // completion interrupt must be paced like real playback. Completing it
+        // in a few cycles makes streaming drivers (e.g. CRI ADX) spin at high
+        // priority and starve every lower-priority IOP thread.
+        uint32_t admas = 0u;
+        if (const auto it = m_hardware.find(0x1F9001B0u + (secondCore ? 0x400u : 0u)); it != m_hardware.end())
+            admas = it->second & 0xFFFFu;
+        const uint64_t delay = admas != 0u ? transferWords * 768u : std::max<uint64_t>(transferWords * 2u, 64u);
+        m_dmaStarts.push_back(DmaStart{
             secondCore ? kDmaSpu1Irq : kDmaSpu0Irq,
-            std::max<uint64_t>(transferWords * 2u, 64u),
-        };
+            delay,
+        });
+    }
+
+    void IopMemory::runSio2Dma(int channel)
+    {
+        const bool input = channel == 11;
+        const uint32_t madrAddress = input ? kDmaSio2InMadr : kDmaSio2OutMadr;
+        const uint32_t chcrAddress = madrAddress + 8u;
+        uint32_t madr = 0u;
+        uint32_t bcr = 0u;
+        if (const auto it = m_hardware.find(madrAddress); it != m_hardware.end())
+            madr = it->second;
+        if (const auto it = m_hardware.find(madrAddress + 4u); it != m_hardware.end())
+            bcr = it->second;
+        static const bool dmaLog = std::getenv("PS2X_IOP_DMA_LOG") != nullptr;
+        if (dmaLog)
+            std::fprintf(stderr, "[iop-dma] sio2 ch%d madr=%08X bcr=%08X\n", channel, madr, bcr);
+        madr = input ? m_sio2->dmaIn(*this, madr, bcr) : m_sio2->dmaOut(*this, madr, bcr);
+        m_hardware[madrAddress] = madr;
+        m_hardware[chcrAddress] &= ~kDmaStart;
+        m_dmaStarts.push_back(DmaStart{input ? IopSio2::DmaInIrq : IopSio2::DmaOutIrq, kSio2DmaIrqDelayCycles});
     }
 
     std::optional<IopMemory::DmaStart> IopMemory::takeDmaStart() noexcept
     {
-        std::optional<DmaStart> result = m_dmaStart;
-        m_dmaStart.reset();
+        if (m_dmaStarts.empty())
+            return std::nullopt;
+        const DmaStart result = m_dmaStarts.front();
+        m_dmaStarts.erase(m_dmaStarts.begin());
         return result;
     }
 

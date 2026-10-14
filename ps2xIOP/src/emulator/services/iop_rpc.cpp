@@ -1,3 +1,5 @@
+#include <cstdio>
+#include <cstdlib>
 #include "iop_rpc.h"
 
 #include "../core/iop_cpu.h"
@@ -39,6 +41,7 @@ namespace ps2x::iop::detail
             setV0(0u);
             return true;
         case 7: // sceSifSetDma
+        case 32: // isceSifSetDma (interrupt-context variant, same contract)
         {
             constexpr uint32_t kDescriptorSize = 16u;
             constexpr uint32_t kMaxDescriptors = 32u;
@@ -115,6 +118,24 @@ namespace ps2x::iop::detail
             if (m_nextDmaId == 0u || m_nextDmaId > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()))
             {
                 m_nextDmaId = 1u;
+            }
+            {
+                // Debug aid: PS2X_IOP_SIFDMA_LOG=1 logs IOP->EE SIF DMA transfers.
+                static const bool s_log = []()
+                {
+                    const char *env = std::getenv("PS2X_IOP_SIFDMA_LOG");
+                    return env && *env && *env != '0';
+                }();
+                static uint32_t s_logged = 0u;
+                if (s_log && s_logged < 200u)
+                {
+                    ++s_logged;
+                    std::fprintf(stderr, "[iop-sifdma] id=%u descriptors=%u first: iop=0x%X -> ee=0x%08X size=0x%X\n",
+                                 dmaId, pendingCount,
+                                 pendingCount ? pending[0].source : 0u, pendingCount ? pending[0].destination : 0u,
+                                 pendingCount ? pending[0].size : 0u);
+                    std::fflush(stderr);
+                }
             }
             setV0(dmaId);
             return true;
