@@ -303,12 +303,31 @@ namespace
         return 1;
     }
 
-    const Pcsx2GsApi g_api = {PCSX2GS_API_VERSION, Open, Close, Gif, Vsync, Reset, ReadFifo, Resize, SetScale, LoadVram, SaveVram, ReadLocal, pcsx2gs::SetOsd, Snapshot, pcsx2gs::SetMenu, pcsx2gs::MenuInput, Frame};
+    void GifPath(uint32_t path, const uint8_t *data, uint32_t qwc)
+    {
+        if (!g_open || !data || !qwc || !g_gs_renderer)
+            return;
+        switch (path)
+        {
+        case 1: g_gs_renderer->Transfer<0>(data, qwc); break;
+        case 2: g_gs_renderer->Transfer<1>(data, qwc); break;
+        case 3: g_gs_renderer->Transfer<2>(data, qwc); break;
+        default: g_gs_renderer->Transfer<3>(data, qwc); break;
+        }
+    }
+
+    void WriteCsr(uint32_t csr)
+    {
+        if (g_open)
+            GSwriteCSR(csr);
+    }
+
+    const Pcsx2GsApi g_api = {PCSX2GS_API_VERSION, Open, Close, Gif, Vsync, Reset, ReadFifo, Resize, SetScale, LoadVram, SaveVram, ReadLocal, pcsx2gs::SetOsd, Snapshot, pcsx2gs::SetMenu, pcsx2gs::MenuInput, Frame, GifPath, WriteCsr};
 }
 
 PCSX2GS_EXPORT const Pcsx2GsApi *pcsx2gs_get_api(uint32_t version)
 {
-    return version == PCSX2GS_API_VERSION ? &g_api : nullptr;
+    return version >= 100u && version <= PCSX2GS_API_VERSION ? &g_api : nullptr;
 }
 
 // The aspect ratio while the game runs (0 = 4:3, 1 = 16:9, 2 = fill the window), read at every present: the port uses

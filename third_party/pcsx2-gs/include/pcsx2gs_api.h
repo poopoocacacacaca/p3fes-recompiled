@@ -11,7 +11,7 @@ extern "C" {
 
 // P3FES fork of the interface: OpenGL/software renderers, optional headless (surfaceless) rendering with a CPU
 // readback of each presented field (frame()).
-#define PCSX2GS_API_VERSION 100u
+#define PCSX2GS_API_VERSION 101u
 
 typedef struct Pcsx2GsOpenParams
 {
@@ -151,6 +151,11 @@ typedef struct Pcsx2GsApi
     // Headless mode: the last field presented, read back as 32-bit RGBA (R in the low byte), at the internal
     // resolution. Valid until the next vsync. Returns 0 when there is none.
     int (*frame)(uint32_t *width, uint32_t *height, const uint32_t **pixels);
+    // Version 101. GIF data of one PATH (1, 2 or 3), each with its own tag state as on the PS2, so packets of
+    // different paths may interleave between calls. path 0 = the merged stream of gif().
+    void (*gif_path)(uint32_t path, const uint8_t *data, uint32_t qwc);
+    // EE write to CSR (SIGNAL/FINISH/HSINT/VSINT acknowledgements, FLUSH, RESET).
+    void (*write_csr)(uint32_t csr);
 } Pcsx2GsApi;
 
 typedef const Pcsx2GsApi *(*Pcsx2GsGetApiFn)(uint32_t version);
