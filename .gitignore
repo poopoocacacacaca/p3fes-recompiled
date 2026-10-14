@@ -23,3 +23,13 @@ android/app/.cxx/
 android/local.properties
 android/.gradle/ 
 .idea/
+# Persona 3 FES port: never commit game data, saves or builds
+*.CVM
+*.cvm
+SLUS_*
+SYSTEM.CNF
+LIB31/
+memcards/
+*.ps2
+build-*/
+p3fes/output/
