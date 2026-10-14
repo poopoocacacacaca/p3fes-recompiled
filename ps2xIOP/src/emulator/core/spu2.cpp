@@ -1,6 +1,8 @@
 #include "spu2.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 
 namespace ps2x::iop::detail
 {
@@ -447,6 +449,26 @@ namespace ps2x::iop::detail
 
     void Spu2::step()
     {
+        {
+            // Debug aid: PS2X_SPU2_DIAG=1 prints the mixer-relevant registers once per emulated second.
+            static const bool diag = std::getenv("PS2X_SPU2_DIAG") != nullptr;
+            static uint64_t samples = 0u;
+            if (diag && (++samples % 48000u) == 0u)
+            {
+                for (uint32_t core = 0; core < 2u; ++core)
+                {
+                    const uint32_t base = core * 0x400u;
+                    const uint32_t m = RegMvolBase + core * RegMvolStride;
+                    std::fprintf(stderr,
+                                 "[spu2-diag] t=%llus core%u admas=%04X attr=%04X mmix=%04X mvol=%04X/%04X bvol=%04X/%04X "
+                                 "avol=%04X/%04X ring=%u queue=%zu\n",
+                                 static_cast<unsigned long long>(samples / 48000u), core, reg(base + RegAdmas),
+                                 reg(base + RegAttr), reg(base + RegMmix), reg(m), reg(m + 2u), reg(m + 0x0Cu), reg(m + 0x0Eu),
+                                 reg(m + 0x08u), reg(m + 0x0Au), m_input[core].ringCount,
+                                 m_input[core].queue.size() - m_input[core].queueRead);
+                }
+            }
+        }
         int32_t coreOut[2][2] = {};
         for (uint32_t core = 0; core < 2u; ++core)
         {
@@ -475,8 +497,9 @@ namespace ps2x::iop::detail
             {
                 const auto &frame = input.ring[input.ringRead];
                 const uint32_t bvol = RegMvolBase + core * RegMvolStride + 0x0Cu;
-                left += (frame[0] * volumeFromRegister(reg(bvol))) >> 14;
-                right += (frame[1] * volumeFromRegister(reg(bvol + 2u))) >> 14;
+                // BVOL is a plain signed 16-bit volume (0x7FFF = unity), unlike the sweep-format MVOL.
+                left += (frame[0] * static_cast<int16_t>(reg(bvol))) >> 15;
+                right += (frame[1] * static_cast<int16_t>(reg(bvol + 2u))) >> 15;
                 input.ringRead = (input.ringRead + 1u) % InputFrames;
                 --input.ringCount;
             }

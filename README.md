@@ -81,7 +81,7 @@ R3000A interpreter. The IOP kernel and libraries (`sysmem`, `loadcore`, `intrman
 | Library | Role | Status in the port |
 |---|---|---|
 | CRI Sofdec (`libmwsfde`) + Sony `libmpeg` | FMV playback (`.SFD`, MPEG-1 640×448) through the IPU | Decodes correctly |
-| CRI ADX (`CRI_ADXI.IRX`) | Streamed music and movie audio | Streams. Audible output needs the SPU2 path verified. |
+| CRI ADX (`CRI_ADXI.IRX`) | Streamed music and movie audio through SPU2 AutoDMA | Working (verified from the emulated SPU2 output) |
 | Atlus sound driver (`SKSOUND`/`MODHSYN`) | Sound effects and sequenced audio | Loads |
 | `libmc2` + `MC2_S1.IRX` | Memory card | Card detected (8 MB) |
 | `libpad` + `PADMAN.IRX` | DualShock 2 | Working |
@@ -97,8 +97,8 @@ R3000A interpreter. The IOP kernel and libraries (`sysmem`, `loadcore`, `intrman
 | Controller and keyboard input | ✅ |
 | ATLUS and CRI logos | ✅ |
 | Opening movie decoded through the IPU | ✅ |
-| Movies at full speed | 🔧 the CPU GS rasterizer is the bottleneck. Moving to the GPU backend. |
-| Audio | 🔧 SPU2 emulation integrated, verification in progress |
+| Movies at full speed | 🔧 ~0.4× in the 2-core test VM: the CPU GS rasterizer (alpha-blended textured fans, twice per frame) is the bottleneck while the EE thread idles ~75%. Integrating PCSX2's GS. |
+| Opening movie audio (CRI ADX over SPU2 AutoDMA) | ✅ |
 | Title screen | 🔧 next |
 | New Game, field and dungeon rendering | ⏳ |
 | Battles, social links, events | ⏳ |

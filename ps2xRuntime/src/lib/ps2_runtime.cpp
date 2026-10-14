@@ -28,6 +28,8 @@
 #include <thread>
 #include <unordered_map>
 #include <sstream>
+#include <string>
+#include <vector>
 #include <cstdio>
 #include <cstdlib>
 
@@ -62,8 +64,41 @@ namespace
         std::fill(out + produced * 2u, out + static_cast<size_t>(frames) * 2u, int16_t{0}); // sin datos: silencio
     }
 
+    // P3FES: with no audio device (headless test runs) but GOW_AUDIO_PCM set, a thread drains every emulated
+    // sample into the file so the audio can still be checked.
+    void startHeadlessPcmDump(ps2x::iop::IopSubsystem *source)
+    {
+        const char *path = std::getenv("GOW_AUDIO_PCM");
+        if (!path || !*path || source == nullptr)
+            return;
+        std::thread([source, file = std::string(path)]()
+                    {
+                        std::FILE *pcm = std::fopen(file.c_str(), "wb");
+                        if (!pcm)
+                            return;
+                        std::vector<int16_t> buffer(4096u * 2u);
+                        for (;;)
+                        {
+                            const size_t frames = source->drainAudio(buffer.data(), 4096u, SIZE_MAX);
+                            if (frames != 0u)
+                            {
+                                std::fwrite(buffer.data(), sizeof(int16_t) * 2u, frames, pcm);
+                                std::fflush(pcm);
+                            }
+                            else
+                                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                        } })
+            .detach();
+        std::cerr << "[SPU2] no audio device: dumping emulated output to " << path << std::endl;
+    }
+
     void startSpu2Audio(ps2x::iop::IopSubsystem *source)
     {
+        if (!IsAudioDeviceReady())
+        {
+            startHeadlessPcmDump(source);
+            return;
+        }
         const char *setting = std::getenv("GOW_AUDIO");
         if (g_spu2StreamActive || source == nullptr || !IsAudioDeviceReady() || (setting && setting[0] == '0'))
             return;
