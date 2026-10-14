@@ -351,6 +351,8 @@ public:
                                uint32_t sourcePc,
                                GuestBranchKind kind,
                                const char *debugName);
+    // Debug aid: the recent guest dispatch PCs (all threads), oldest first.
+    std::string dispatchHistoryString() const;
     void setMissingFunctionPolicy(MissingFunctionPolicy policy);
     MissingFunctionPolicy missingFunctionPolicy() const;
     void resetMissingFunctionReportOnce();

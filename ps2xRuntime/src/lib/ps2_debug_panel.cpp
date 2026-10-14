@@ -2206,6 +2206,20 @@ void PS2DebugPanel::draw(PS2Runtime &runtime)
         return;
     }
 
+    {
+        // PS2X_HIDE_DEBUG_UI=1 starts with the panel hidden (F1 still toggles it).
+        static bool s_appliedStartHidden = false;
+        if (!s_appliedStartHidden)
+        {
+            s_appliedStartHidden = true;
+            const char *env = std::getenv("PS2X_HIDE_DEBUG_UI");
+            if (env && *env && *env != '0' && m_visible)
+            {
+                toggleVisible();
+            }
+        }
+    }
+
     if (IsKeyPressed(KEY_F1))
     {
         toggleVisible();

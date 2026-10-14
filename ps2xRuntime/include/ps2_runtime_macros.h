@@ -597,6 +597,52 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
     return _mm_set1_epi64x(static_cast<long long>(value));
 }
 
+// Full 128-bit HI/LO move-from (EE manual, PMFHL.fmt). HI = {hi, hi1}, LO = {lo, lo1}:
+// word 0/1 of each pipeline live in hi/lo, words 2/3 in hi1/lo1.
+inline uint32_t ps2_hl_word(uint64_t v, int i) { return static_cast<uint32_t>(v >> (32 * i)); }
+inline uint16_t ps2_sat16(uint32_t w)
+{
+    const int32_t v = static_cast<int32_t>(w);
+    return static_cast<uint16_t>(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
+}
+inline int64_t ps2_sat32_of64(uint32_t hiWord, uint32_t loWord)
+{
+    const int64_t v = static_cast<int64_t>((static_cast<uint64_t>(hiWord) << 32) | loWord);
+    return v > 0x7FFFFFFFLL ? 0x7FFFFFFFLL : (v < -0x80000000LL ? -0x80000000LL : v);
+}
+inline __m128i ps2_pmfhl_lw(uint64_t hi, uint64_t lo, uint64_t hi1, uint64_t lo1)
+{
+    return _mm_set_epi32(static_cast<int>(ps2_hl_word(hi1, 0)), static_cast<int>(ps2_hl_word(lo1, 0)),
+                         static_cast<int>(ps2_hl_word(hi, 0)), static_cast<int>(ps2_hl_word(lo, 0)));
+}
+inline __m128i ps2_pmfhl_uw(uint64_t hi, uint64_t lo, uint64_t hi1, uint64_t lo1)
+{
+    return _mm_set_epi32(static_cast<int>(ps2_hl_word(hi1, 1)), static_cast<int>(ps2_hl_word(lo1, 1)),
+                         static_cast<int>(ps2_hl_word(hi, 1)), static_cast<int>(ps2_hl_word(lo, 1)));
+}
+inline __m128i ps2_pmfhl_slw(uint64_t hi, uint64_t lo, uint64_t hi1, uint64_t lo1)
+{
+    return _mm_set_epi64x(ps2_sat32_of64(ps2_hl_word(hi1, 0), ps2_hl_word(lo1, 0)),
+                          ps2_sat32_of64(ps2_hl_word(hi, 0), ps2_hl_word(lo, 0)));
+}
+inline __m128i ps2_pmfhl_lh(uint64_t hi, uint64_t lo, uint64_t hi1, uint64_t lo1)
+{
+    auto h = [](uint64_t v, int i) { return static_cast<short>(static_cast<uint16_t>(v >> (16 * i))); };
+    return _mm_set_epi16(h(hi1, 2), h(hi1, 0), h(lo1, 2), h(lo1, 0), h(hi, 2), h(hi, 0), h(lo, 2), h(lo, 0));
+}
+inline __m128i ps2_pmfhl_sh(uint64_t hi, uint64_t lo, uint64_t hi1, uint64_t lo1)
+{
+    auto s = [](uint64_t v, int i) { return static_cast<short>(ps2_sat16(ps2_hl_word(v, i))); };
+    return _mm_set_epi16(s(hi1, 1), s(hi1, 0), s(lo1, 1), s(lo1, 0), s(hi, 1), s(hi, 0), s(lo, 1), s(lo, 0));
+}
+#define PS2_PMFHL4_LW(hi, lo, hi1, lo1) ps2_pmfhl_lw(hi, lo, hi1, lo1)
+#define PS2_PMFHL4_UW(hi, lo, hi1, lo1) ps2_pmfhl_uw(hi, lo, hi1, lo1)
+#define PS2_PMFHL4_SLW(hi, lo, hi1, lo1) ps2_pmfhl_slw(hi, lo, hi1, lo1)
+#define PS2_PMFHL4_LH(hi, lo, hi1, lo1) ps2_pmfhl_lh(hi, lo, hi1, lo1)
+#define PS2_PMFHL4_SH(hi, lo, hi1, lo1) ps2_pmfhl_sh(hi, lo, hi1, lo1)
+
+// Legacy two-argument forms (kept for previously generated code; they ignore HI1/LO1
+// and place whole 64-bit LO/HI halves, which is only right for a subset of uses).
 #define PS2_PMFHL_LW(hi, lo) _mm_unpacklo_epi64(ps2_u64_to_epi64_pair(lo), ps2_u64_to_epi64_pair(hi))
 #define PS2_PMFHL_UW(hi, lo) _mm_unpackhi_epi64(ps2_u64_to_epi64_pair(lo), ps2_u64_to_epi64_pair(hi))
 #define PS2_PMFHL_SLW(hi, lo) _mm_packs_epi32(ps2_u64_to_epi64_pair(lo), ps2_u64_to_epi64_pair(hi))
@@ -623,7 +669,18 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
 #define FPU_FLOOR_W_S(a) ((int32_t)floorf((float)(a)))
 #define FPU_CVT_S_W(a) ((float)(int32_t)(a))
 #define FPU_CVT_S_L(a) ((float)(int64_t)(a))
-#define FPU_CVT_W_S(a) ((int32_t)nearbyintf((float)(a)))
+// EE FPU conversions always round toward zero and saturate on overflow.
+inline int32_t ps2_fpu_cvt_w_s(float f)
+{
+    if (f >= 2147483648.0f)
+        return 0x7FFFFFFF;
+    if (f <= -2147483648.0f)
+        return static_cast<int32_t>(0x80000000u);
+    if (f != f)
+        return 0x7FFFFFFF;
+    return static_cast<int32_t>(f);
+}
+#define FPU_CVT_W_S(a) ps2_fpu_cvt_w_s((float)(a))
 #define FPU_CVT_L_S(a) ((int64_t)(float)(a))
 #define FPU_C_F_S(a, b) (0)
 #define FPU_C_UN_S(a, b) (isnan((float)(a)) || isnan((float)(b)))

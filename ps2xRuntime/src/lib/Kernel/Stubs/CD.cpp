@@ -1,4 +1,7 @@
+#include <chrono>
 #include "Common.h"
+#include <cstdio>
+#include <cstdlib>
 #include "CD.h"
 #include "MPEG.h"
 #include "runtime/ee_scheduler.h"
@@ -245,6 +248,22 @@ namespace ps2_stubs
 
         CdReadArgs selected{a0, a1, a2, "a0/a1/a2"};
         bool ok = tryRead(selected);
+        {
+            // Debug aid: PS2X_CD_LOG=1 logs each EE-side sceCdRead (primary decode).
+            static const bool s_cdLog = []()
+            {
+                const char *env = std::getenv("PS2X_CD_LOG");
+                return env && *env && *env != '0';
+            }();
+            if (s_cdLog)
+            {
+                static const auto s_t0 = std::chrono::steady_clock::now();
+                const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - s_t0).count();
+                std::fprintf(stderr, "[ee-cd] t=%.2f sceCdRead lbn=0x%X sectors=0x%X buf=0x%08X ok=%d resolvable=%d pc=0x%08X ra=0x%08X\n",
+                             secs, a0, a1, a2, ok ? 1 : 0, isResolvableCdLbn(a0) ? 1 : 0, ctx->pc, getRegU32(ctx, 31));
+                std::fflush(stderr);
+            }
+        }
 
         if (!ok)
         {

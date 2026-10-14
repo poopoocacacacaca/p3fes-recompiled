@@ -5,12 +5,54 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace
 {
+    // Debug aid: PS2X_LOG_HANDOFFS=1 logs every scheduler hand-off (the
+    // EeDispatcherTransfer throw sites) with the thread's base and active context.
+    bool handoffLogEnabled()
+    {
+        static const bool enabled = []()
+        {
+            const char *env = std::getenv("PS2X_LOG_HANDOFFS");
+            return env && *env && *env != '0';
+        }();
+        return enabled;
+    }
+
+    void logHandoff(const char *site, const GuestThread *thread)
+    {
+        if (!handoffLogEnabled() || !thread)
+            return;
+        const R5900Context &base = thread->context;
+        const R5900Context &active = thread->activeContext();
+        std::fprintf(stderr,
+                     "[handoff] %s thread=%d base(pc=0x%08X sp=0x%08X ra=0x%08X) active(pc=0x%08X sp=0x%08X ra=0x%08X) invocations=%zu\n",
+                     site, thread->id,
+                     base.pc, getRegU32(&base, 29), getRegU32(&base, 31),
+                     active.pc, getRegU32(&active, 29), getRegU32(&active, 31),
+                     thread->invocations.size());
+        std::fflush(stderr);
+    }
+
+
+    // Debug aid: PS2X_LOG_SUSPEND=1 logs Suspend/Resume/Wakeup calls with the caller.
+    bool suspendLogEnabled()
+    {
+        static const bool enabled = []()
+        {
+            const char *env = std::getenv("PS2X_LOG_SUSPEND");
+            return env && *env && *env != '0';
+        }();
+        return enabled;
+    }
+
     constexpr int KE_OK = 0;
     constexpr int KE_ERROR = -1;
     constexpr int KE_ILLEGAL_PRIORITY = -403;
@@ -168,6 +210,39 @@ void EeScheduler::run()
         if (m_currentThreadId == 0)
         {
             GuestThread *next = selectReady();
+            if (!next && m_pendingInvocations.empty() && handoffLogEnabled())
+            {
+                // Debug aid: going idle while some thread claims to be Ready means
+                // the ready queues and thread states disagree.
+                static uint32_t s_idleReports = 0u;
+                bool anyReady = false;
+                for (const auto &[tid, t] : m_threads)
+                {
+                    if (t.status == EeThreadStatus::Ready)
+                    {
+                        anyReady = true;
+                        break;
+                    }
+                }
+                if (anyReady && s_idleReports < 20u)
+                {
+                    ++s_idleReports;
+                    std::fprintf(stderr, "[sched-idle] no queued thread, but Ready threads exist:");
+                    for (const auto &[tid, t] : m_threads)
+                    {
+                        if (t.status == EeThreadStatus::Ready)
+                            std::fprintf(stderr, " id=%d(prio=%d)", t.id, t.currentPriority);
+                    }
+                    std::fprintf(stderr, " | non-empty queues:");
+                    for (int p = 0; p < kPriorityCount; ++p)
+                    {
+                        if (!m_readyQueues[p].empty())
+                            std::fprintf(stderr, " q%d=%zu", p, m_readyQueues[p].size());
+                    }
+                    std::fprintf(stderr, "\n");
+                    std::fflush(stderr);
+                }
+            }
             if (!next && m_pendingInvocations.empty())
             {
                 copyMainContextToRuntime();
@@ -246,6 +321,14 @@ void EeScheduler::run()
                 }
                 continue;
             }
+            if (running->id > 0)
+            {
+                std::fprintf(stderr,
+                             "[thread-end] thread id=%d returned to pc=0 (entry=0x%08X ra=0x%08X sp=0x%08X) trace=%s\n",
+                             running->id, running->entry, getRegU32(&context, 31), getRegU32(&context, 29),
+                             m_runtime.dispatchHistoryString().c_str());
+                std::fflush(stderr);
+            }
             makeDormant(*running);
             m_currentThreadId = 0;
             copyMainContextToRuntime();
@@ -296,6 +379,26 @@ void EeScheduler::run()
         {
             m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
             m_guestExecuting.store(true, std::memory_order_release);
+            if (handoffLogEnabled())
+            {
+                // Debug aid: per-thread dispatch counts, printed every 2^12 dispatches,
+                // to tell a spinning thread from one that is never scheduled.
+                static std::unordered_map<int, uint64_t> s_dispatchCounts;
+                static std::unordered_map<int, uint32_t> s_lastDispatchPc;
+                static uint64_t s_totalDispatches = 0u;
+                ++s_dispatchCounts[running->id];
+                s_lastDispatchPc[running->id] = context.pc;
+                if ((++s_totalDispatches & 0xFFFu) == 0u)
+                {
+                    std::fprintf(stderr, "[dispatch] total=%llu", static_cast<unsigned long long>(s_totalDispatches));
+                    for (const auto &[tid, n] : s_dispatchCounts)
+                    {
+                        std::fprintf(stderr, " t%d=%llu(last pc=0x%08X)", tid, static_cast<unsigned long long>(n), s_lastDispatchPc[tid]);
+                    }
+                    std::fprintf(stderr, "\n");
+                    std::fflush(stderr);
+                }
+            }
             function(m_rdram, &context, &m_runtime);
             m_guestExecuting.store(false, std::memory_order_release);
             m_insideInterrupt = false;
@@ -423,15 +526,39 @@ void EeScheduler::setupCurrentThread(uint32_t stack, uint32_t stackSize, uint32_
 int EeScheduler::createThread(const EeThreadCreateParams &params)
 {
     assertExecutor();
-    if (params.priority < 1 || params.priority >= kPriorityCount)
+    if (handoffLogEnabled())
     {
+        std::fprintf(stderr, "[create-thread] request entry=0x%08X stack=0x%08X size=0x%X gp=0x%08X prio=%d attr=0x%X by-thread=%d\n",
+                     params.entry, params.stack, params.stackSize, params.gp, params.priority, params.attr, m_currentThreadId);
+        std::fflush(stderr);
+    }
+    // EE thread priorities run 0 (highest) to 127; the main thread itself starts
+    // at 0, and CRI ADXM asks for priority 0 for its worker threads. Rejecting 0
+    // (the previous `< 1` check) left ADX's file/audio servers with no threads.
+    if (params.priority < 0 || params.priority >= kPriorityCount)
+    {
+        if (handoffLogEnabled())
+        {
+            std::fprintf(stderr, "[create-thread] REJECTED illegal priority %d (entry=0x%08X)\n", params.priority, params.entry);
+            std::fflush(stderr);
+        }
         return KE_ILLEGAL_PRIORITY;
     }
 
     const int id = allocateThreadId();
     if (id == 0)
     {
+        if (handoffLogEnabled())
+        {
+            std::fprintf(stderr, "[create-thread] REJECTED no free thread id (entry=0x%08X)\n", params.entry);
+            std::fflush(stderr);
+        }
         return KE_ERROR;
+    }
+    if (handoffLogEnabled())
+    {
+        std::fprintf(stderr, "[create-thread] created id=%d entry=0x%08X\n", id, params.entry);
+        std::fflush(stderr);
     }
 
     GuestThread thread{};
@@ -502,6 +629,16 @@ int EeScheduler::startThread(int id, uint32_t arg, const R5900Context &caller, b
                                   : getRegU32(&caller, 29);
     SET_GPR_U32(&target->context, 29, stackTop);
     SET_GPR_U32(&target->context, 31, 0u);
+    if (handoffLogEnabled())
+    {
+        std::fprintf(stderr,
+                     "[start-thread] id=%d entry=0x%08X stack=0x%08X size=0x%X -> sp=0x%08X (from %s) prio=%d caller(pc=0x%08X sp=0x%08X ra=0x%08X) by-thread=%d\n",
+                     id, target->entry, target->stack, target->stackSize, stackTop,
+                     target->stack != 0u ? "own stack" : "CALLER sp",
+                     target->currentPriority, caller.pc, getRegU32(&caller, 29), getRegU32(&caller, 31),
+                     m_currentThreadId);
+        std::fflush(stderr);
+    }
     enqueueReady(*target);
     requestPreemptionIfHigher(*target, interruptSafe);
     publishSnapshot();
@@ -515,6 +652,10 @@ int EeScheduler::startThread(int id, uint32_t arg, const R5900Context &caller, b
     assert(exiting != nullptr);
     const int id = exiting->id;
     const uint32_t ownedStack = deleteThreadRecord && exiting->ownsStack ? exiting->stack : 0u;
+    std::fprintf(stderr, "[thread-end] thread id=%d called %s trace=%s\n", id,
+                 deleteThreadRecord ? "ExitDeleteThread" : "ExitThread",
+                 m_runtime.dispatchHistoryString().c_str());
+    std::fflush(stderr);
     makeDormant(*exiting);
     m_currentThreadId = 0;
     if (deleteThreadRecord && id != kMainThreadId)
@@ -560,6 +701,15 @@ int EeScheduler::terminateThread(int id, uint32_t &ownedStack, bool interruptSaf
 int EeScheduler::suspendThread(int id, bool interruptSafe)
 {
     assertExecutor();
+    if (suspendLogEnabled())
+    {
+        const GuestThread *caller = currentThread();
+        std::fprintf(stderr, "[suspend] target=%d caller=%d pc=0x%08X ra=0x%08X irq=%d\n", id,
+                     caller ? caller->id : -1,
+                     caller ? caller->activeContext().pc : 0u,
+                     caller ? getRegU32(&caller->activeContext(), 31) : 0u,
+                     m_insideInterrupt ? 1 : 0);
+    }
     if (id == 0)
     {
         id = m_currentThreadId;
@@ -606,6 +756,15 @@ int EeScheduler::suspendThread(int id, bool interruptSafe)
 int EeScheduler::resumeThread(int id, bool interruptSafe)
 {
     assertExecutor();
+    if (suspendLogEnabled())
+    {
+        const GuestThread *caller = currentThread();
+        std::fprintf(stderr, "[resume] target=%d caller=%d pc=0x%08X ra=0x%08X irq=%d\n", id,
+                     caller ? caller->id : -1,
+                     caller ? caller->activeContext().pc : 0u,
+                     caller ? getRegU32(&caller->activeContext(), 31) : 0u,
+                     m_insideInterrupt ? 1 : 0);
+    }
     if (id == 0)
     {
         return KE_ILLEGAL_THID;
@@ -654,6 +813,15 @@ void EeScheduler::sleepCurrent()
 int EeScheduler::wakeupThread(int id, bool interruptSafe)
 {
     assertExecutor();
+    if (suspendLogEnabled())
+    {
+        const GuestThread *caller = currentThread();
+        std::fprintf(stderr, "[wakeup] target=%d caller=%d pc=0x%08X ra=0x%08X irq=%d\n", id,
+                     caller ? caller->id : -1,
+                     caller ? caller->activeContext().pc : 0u,
+                     caller ? getRegU32(&caller->activeContext(), 31) : 0u,
+                     m_insideInterrupt ? 1 : 0);
+    }
     if (id == 0 || id == m_currentThreadId)
     {
         return KE_ILLEGAL_THID;
@@ -701,7 +869,15 @@ int EeScheduler::cancelWakeup(int id)
 int EeScheduler::changePriority(int id, int priority, bool interruptSafe, int &oldPriority)
 {
     assertExecutor();
-    if (priority < 1 || priority >= kPriorityCount)
+    // Experiment: accepting priority 0 here (PS2X_ALLOW_PRIO0_CHANGE=1) let CRI
+    // raise a spinning worker above the main thread and regressed boot, so the
+    // original 1..127 check stays the default until real-kernel behaviour is known.
+    static const bool s_allowPrio0Change = []()
+    {
+        const char *env = std::getenv("PS2X_ALLOW_PRIO0_CHANGE");
+        return env && *env && *env != '0';
+    }();
+    if (priority < (s_allowPrio0Change ? 0 : 1) || priority >= kPriorityCount)
     {
         return KE_ILLEGAL_PRIORITY;
     }
@@ -809,6 +985,7 @@ void EeScheduler::transferIfRequested(bool interruptSafe)
     {
         GuestThread *self = currentThread();
         assert(self != nullptr);
+        logHandoff("transfer", self);
         enqueueReady(*self, true);
         m_currentThreadId = 0;
     }
@@ -1117,6 +1294,7 @@ void EeScheduler::queueInvocation(GuestInvocation invocation)
     }
     invocation.sequence = ++m_invocationSequence;
     owner->invocations.push_back(std::move(invocation));
+    logHandoff("invoke", owner);
     publishSnapshot();
     throw EeDispatcherTransfer{};
 }
@@ -1136,6 +1314,7 @@ void EeScheduler::queueInvocation(GuestInvocation invocation)
         it->sequence = ++m_invocationSequence;
         owner->invocations.push_back(std::move(*it));
     }
+    logHandoff("invoke-seq", owner);
     publishSnapshot();
     throw EeDispatcherTransfer{};
 }
@@ -1196,6 +1375,9 @@ int EeScheduler::addIrqHandler(bool dmac,
     {
         return KE_ERROR;
     }
+    if (suspendLogEnabled())
+        std::fprintf(stderr, "[irq-add] %s cause=%u handler=0x%08X arg=0x%08X id=%d\n",
+                     dmac ? "dmac" : "intc", cause, handler, argument, id);
     int &head = dmac ? m_dmacHeadOrder : m_intcHeadOrder;
     int &tail = dmac ? m_dmacTailOrder : m_intcTailOrder;
     handlers.emplace(id,
@@ -1256,6 +1438,9 @@ void EeScheduler::dispatchIrq(bool dmac, uint32_t cause)
 {
     assertExecutor();
     const uint32_t mask = dmac ? m_enabledDmacMask : m_enabledIntcMask;
+    if (suspendLogEnabled() && !(dmac == false && cause <= 3u))
+        std::fprintf(stderr, "[irq] %s cause=%u enabled=%d\n", dmac ? "dmac" : "intc", cause,
+                     (cause < 32u && (mask & (1u << cause))) ? 1 : 0);
     if (cause < 32u && (mask & (1u << cause)) == 0u)
     {
         return;
@@ -1686,6 +1871,7 @@ void EeScheduler::blockCurrent(EeWaitState wait)
     assert(self != nullptr);
     self->wait = std::move(wait);
     self->status = self->suspendCount == 0 ? EeThreadStatus::Waiting : EeThreadStatus::WaitingSuspended;
+    logHandoff("block", self);
     m_currentThreadId = 0;
     publishSnapshot();
     throw EeDispatcherTransfer{};

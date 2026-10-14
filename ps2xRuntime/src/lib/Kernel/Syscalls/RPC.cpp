@@ -2,6 +2,9 @@
 #include "RPC.h"
 #include "../../ps2_iop_transport.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 namespace ps2_syscalls
 {
     namespace
@@ -16,10 +19,57 @@ namespace ps2_syscalls
             return event;
         }
 
+        // Debug aid: PS2X_RPC_LOG=1 mirrors the debug panel's RPC History to stderr.
+        bool rpcLogEnabled()
+        {
+            static const bool s_logRpc = []()
+            {
+                const char *env = std::getenv("PS2X_RPC_LOG");
+                return env && *env && *env != '0';
+            }();
+            return s_logRpc;
+        }
+
         void pushSifRpcDebugEventLocked(SifRpcDebugEvent event)
         {
             event.seq = ++g_sif_rpc_debug_next_seq;
             g_sif_rpc_debug_history[event.seq % kSifRpcDebugHistoryCount] = event;
+            if (rpcLogEnabled())
+            {
+                auto word0 = [](const uint8_t *p, uint32_t n) -> long long
+                {
+                    if (n < 4u)
+                        return -1;
+                    return static_cast<long long>(static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+                                                  (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24));
+                };
+                const long long sendWord = word0(event.sendPreview, event.sendPreviewSize);
+                const long long recvWord = word0(event.recvPreview, event.recvPreviewSize);
+                auto words4 = [&](const uint8_t *p, uint32_t n) -> std::string
+                {
+                    std::string out;
+                    char buf[16];
+                    for (uint32_t i = 0u; i + 4u <= n && i < 16u; i += 4u)
+                    {
+                        std::snprintf(buf, sizeof(buf), "%s%08X", i ? "," : "", word0(p + i, 4u) < 0 ? 0u : static_cast<unsigned>(word0(p + i, 4u)));
+                        out += buf;
+                    }
+                    return out.empty() ? std::string("-") : out;
+                };
+                const std::string sendWords = words4(event.sendPreview, event.sendPreviewSize);
+                const std::string recvWords = words4(event.recvPreview, event.recvPreviewSize);
+                std::fprintf(stderr,
+                             "[rpc] #%llu %s thread=%u pc=0x%08X ra=0x%08X sid=0x%08X fn=0x%X mode=0x%X client=0x%08X server=0x%08X send=0x%08X/%u recv=0x%08X/%u end=0x%08X param=0x%08X sema=%u flags=0x%X sendW0=%s%llX recvW0=%s%llX\n",
+                             static_cast<unsigned long long>(event.seq), event.op ? event.op : "?", event.threadId,
+                             event.pc, event.ra, event.sid, event.rpcNum, event.mode, event.clientPtr, event.serverPtr,
+                             event.sendBuf, event.sendSize, event.recvBuf, event.recvSize, event.endFunc, event.endParam,
+                             event.semaId, event.flags,
+                             sendWord < 0 ? "-" : "0x", sendWord < 0 ? 0ull : static_cast<unsigned long long>(sendWord),
+                             recvWord < 0 ? "-" : "0x", recvWord < 0 ? 0ull : static_cast<unsigned long long>(recvWord));
+                std::fprintf(stderr, "[rpc-words] #%llu send=[%s] recv=[%s]\n",
+                             static_cast<unsigned long long>(event.seq), sendWords.c_str(), recvWords.c_str());
+                std::fflush(stderr);
+            }
         }
 
         void pushSifRpcDebugEvent(SifRpcDebugEvent event)
@@ -342,6 +392,13 @@ namespace ps2_syscalls
     void SifCallRpc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         std::lock_guard<std::recursive_mutex> rpcCallLock(g_sif_call_rpc_mutex);
+        if (rpcLogEnabled())
+        {
+            std::fprintf(stderr, "[rpc-sp] enter thread=%d pc=0x%08X sp=0x%08X ra=0x%08X sid-arg=0x%08X fn-arg=0x%X\n",
+                         runtime ? runtime->eeScheduler().currentThreadId() : -1,
+                         ctx->pc, getRegU32(ctx, 29), getRegU32(ctx, 31), getRegU32(ctx, 4), getRegU32(ctx, 5));
+            std::fflush(stderr);
+        }
 
         const uint32_t clientPtr = getRegU32(ctx, 4);
         const uint32_t rpcNum = getRegU32(ctx, 5);
@@ -544,6 +601,20 @@ namespace ps2_syscalls
             request.endParameter = endParameter;
 
             iopResult = PS2IopTransport::handleRpc(runtime, rdram, ctx, request);
+
+            // Experiment: a real SIF RPC round trip takes wall-clock time during
+            // which IOP threads keep running. PS2X_RPC_CYCLES charges that many EE
+            // cycles per call (default 0 = unchanged behaviour) so polling loops
+            // give the IOP enough time to make progress.
+            static const uint32_t s_rpcCycles = []()
+            {
+                const char *env = std::getenv("PS2X_RPC_CYCLES");
+                return env && *env ? static_cast<uint32_t>(std::strtoul(env, nullptr, 0)) : 0u;
+            }();
+            if (s_rpcCycles != 0u)
+            {
+                runtime->eeScheduler().accountCycles(s_rpcCycles);
+            }
 
             if (iopResult.signalNowaitCompletion &&
                 (mode & kSifRpcModeNowait) != 0u)

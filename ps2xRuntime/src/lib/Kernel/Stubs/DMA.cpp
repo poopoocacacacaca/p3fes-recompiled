@@ -167,7 +167,40 @@ namespace ps2_stubs
 
     void sceDmaRecvN(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        TODO_NAMED("sceDmaRecvN", rdram, ctx, runtime);
+        // sceDmaRecvN(chan, addr, qwc): normal-mode transfer into main memory.
+        // Used e.g. by CRI's MWSPR_SaveSprMem to copy the scratchpad out through
+        // the from-SPR channel (0x1000D000; source = channel SADR set by the game).
+        // Mirrors submitDmaSend: program QWC/MADR, start the channel (the memory
+        // emulation performs scratchpad copies on start), then dispatch handlers.
+        if (!runtime)
+        {
+            setReturnS32(ctx, -1);
+            return;
+        }
+
+        const uint32_t channelBase = resolveDmaChannelBase(rdram, getRegU32(ctx, 4));
+        if (channelBase == 0)
+        {
+            setReturnS32(ctx, -1);
+            return;
+        }
+
+        PS2Memory &mem = runtime->memory();
+        const uint32_t qwc = normalizeQwcFromArg(getRegU32(ctx, 6)) & 0xFFFFu;
+        const uint32_t madr = toDmaPhys(getRegU32(ctx, 5));
+        const uint32_t configuredChcr = mem.readIORegister(channelBase + 0x00u);
+        const uint32_t chcr = 0x00000180u | (configuredChcr & 0x00000040u); // DIR=0 (to memory), TIE=1, STR=1, normal mode.
+
+        mem.writeIORegister(channelBase + 0x20u, qwc);
+        mem.writeIORegister(channelBase + 0x10u, madr);
+        mem.writeIORegister(channelBase + 0x00u, chcr);
+        mem.processPendingTransfers();
+
+        for (const uint32_t completedCause : mem.consumeCompletedDmacCauses())
+        {
+            ps2_syscalls::dispatchDmacHandlersForCause(rdram, runtime, completedCause);
+        }
+        setReturnS32(ctx, 0);
     }
 
     void sceDmaReset(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
