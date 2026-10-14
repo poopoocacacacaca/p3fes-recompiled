@@ -202,6 +202,8 @@ namespace ps2x::iop::detail
                 input.queueRead = 0u;
             }
             input.queue.insert(input.queue.end(), source, source + bytes);
+            input.bytesQueued += bytes;
+            input.transferEnds.push_back(input.bytesQueued);
             feedInput(core);
             return true;
         }
@@ -225,6 +227,15 @@ namespace ps2x::iop::detail
             destination[i + 1u] = static_cast<uint8_t>(value >> 8u);
         }
         setReg32(base + RegTsa, tsa);
+        return true;
+    }
+
+    bool Spu2::takeAdmaDone(uint32_t core) noexcept
+    {
+        InputState &input = m_input[core & 1u];
+        if (input.doneCount == 0u)
+            return false;
+        --input.doneCount;
         return true;
     }
 
@@ -439,6 +450,19 @@ namespace ps2x::iop::detail
             }
             input.ringCount += 256u;
             input.queueRead += kBlockBytes;
+            input.bytesConsumed += kBlockBytes;
+        }
+        // Transfers whose last byte is now in the ring are complete (a trailing partial block counts once the
+        // rest of the queue is consumed).
+        while (!input.transferEnds.empty())
+        {
+            const uint64_t end = input.transferEnds.front();
+            const bool inRing = end <= input.bytesConsumed;
+            const bool tailPartial = end == input.bytesQueued && input.bytesQueued - input.bytesConsumed < kBlockBytes;
+            if (!inRing && !tailPartial)
+                break;
+            input.transferEnds.erase(input.transferEnds.begin());
+            ++input.doneCount;
         }
         if (input.queueRead == input.queue.size() && input.queueRead != 0u)
         {
@@ -493,6 +517,17 @@ namespace ps2x::iop::detail
             InputState &input = m_input[core];
             if (input.ringCount == 0u)
                 feedInput(core);
+            {
+                static const bool diag = std::getenv("PS2X_SPU2_DIAG") != nullptr;
+                static uint32_t reported = 0u;
+                if (diag && input.ringCount == 0u && admaActive(core) && input.bytesQueued != 0u && reported < 40u)
+                {
+                    ++reported;
+                    std::fprintf(stderr, "[spu2-diag] core%u ADMA underrun at cycle %llu: queued=%llu consumed=%llu pending=%zu done=%u\n",
+                                 core, static_cast<unsigned long long>(m_lastCycle), static_cast<unsigned long long>(input.bytesQueued),
+                                 static_cast<unsigned long long>(input.bytesConsumed), input.transferEnds.size(), input.doneCount);
+                }
+            }
             if (input.ringCount != 0u)
             {
                 const auto &frame = input.ring[input.ringRead];

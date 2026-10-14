@@ -318,16 +318,16 @@ namespace ps2x::iop::detail
         else if (m_spu2.dmaRead(core, m_ram.data() + madr, bytes))
             markOwned(madr, bytes);
         m_spu2.markDmaReady(core);
-        // In AutoDMA (ADMA) mode the SPU2 pulls the stream at the 48 kHz output
-        // rate (one 32-bit word = one stereo sample = 768 IOP cycles), so the
-        // completion interrupt is paced like real playback. Completing it in a
-        // few cycles makes streaming drivers (e.g. CRI ADX) spin at high priority
-        // and starve every lower-priority IOP thread.
-        const uint32_t admas = m_spu2.read16(0x1F9001B0u + core * 0x400u);
-        const uint64_t delay = admas != 0u ? transferWords * 768u : std::max<uint64_t>(transferWords * 2u, 64u);
+        // In AutoDMA (ADMA) mode the SPU2 pulls the stream at the 48 kHz output rate, so the completion
+        // interrupt is paced by playback. Completing it in a few cycles makes streaming drivers (e.g. CRI ADX)
+        // spin at high priority and starve every lower-priority IOP thread.
+        // ADMA writes complete from the SPU2 itself (Spu2::takeAdmaDone, serviced by the emulator) as the core
+        // consumes the stream; manual transfers complete after a short delay.
+        if ((value & 1u) != 0u && m_spu2.admaActive(core))
+            return;
         m_dmaStarts.push_back(DmaStart{
             secondCore ? kDmaSpu1Irq : kDmaSpu0Irq,
-            delay,
+            std::max<uint64_t>(transferWords * 2u, 64u),
         });
     }
 

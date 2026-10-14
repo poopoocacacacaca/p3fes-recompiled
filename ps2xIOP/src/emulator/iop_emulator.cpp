@@ -675,6 +675,10 @@ namespace ps2x::iop::detail
             }();
             Spu2 &spu = memory.spu2();
             spu.advanceTo(totalCycles);
+            // ADMA transfers complete as the SPU2 takes their blocks: raise the core's DMA interrupt (4 / 7).
+            for (uint32_t core = 0; core < 2u; ++core)
+                while (spu.takeAdmaDone(core))
+                    pendingDmaInterrupts[core == 0u ? 0x24 : 0x28] = totalCycles;
             if (!spu.takeInterrupt() || !irqEnabled || servicingSpu2Interrupt)
                 return;
             servicingSpu2Interrupt = true;
@@ -762,6 +766,11 @@ namespace ps2x::iop::detail
                         if (!pendingGuestCallbacks.empty())
                             nextWake = std::min(nextWake, pendingGuestCallbacks.begin()->first);
                         nextWake = timrman.nextEventCycle(nextWake);
+                        // P3FES: while a core streams ADMA input, wake at least every 64 samples so its DMA
+                        // completions reach the driver before the input buffer runs dry (idle jumps otherwise
+                        // skip whole blocks and the stream drops samples).
+                        if (memory.spu2().admaActive(0u) || memory.spu2().admaActive(1u))
+                            nextWake = std::min<uint64_t>(nextWake, totalCycles + 64u * Spu2::CyclesPerSample);
                         totalCycles = std::max(totalCycles + 1u, std::min(target, nextWake));
                         continue;
                     }

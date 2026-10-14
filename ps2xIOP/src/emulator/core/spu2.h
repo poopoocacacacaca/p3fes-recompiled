@@ -58,6 +58,11 @@ namespace ps2x::iop::detail
         bool dmaWrite(uint32_t core, const uint8_t *source, size_t bytes);
         bool dmaRead(uint32_t core, uint8_t *destination, size_t bytes);
         void markDmaReady(uint32_t core) noexcept;
+        // ADMA: the core streams sound-data input (its ADMAS bit is set).
+        [[nodiscard]] bool admaActive(uint32_t core) const noexcept { return (reg(core * 0x400u + RegAdmas) & (core + 1u)) != 0u; }
+        // ADMA transfers complete when their last block enters the core's two-block input buffer (like the
+        // hardware, which requests the next block while the other one plays); true once per completed transfer.
+        [[nodiscard]] bool takeAdmaDone(uint32_t core) noexcept;
 
         // Avanza hasta el ciclo indicado del IOP (una muestra cada CyclesPerSample ciclos).
         void advanceTo(uint64_t iopCycle);
@@ -122,6 +127,10 @@ namespace ps2x::iop::detail
             std::array<std::array<int16_t, 2>, InputFrames> ring{};
             uint32_t ringRead = 0;
             uint32_t ringCount = 0;
+            uint64_t bytesQueued = 0;   // total bytes ever queued
+            uint64_t bytesConsumed = 0; // total bytes ever moved into the ring
+            std::vector<uint64_t> transferEnds; // bytesQueued at the end of each pending DMA transfer
+            uint32_t doneCount = 0;
         };
         std::array<InputState, 2> m_input{};
 
