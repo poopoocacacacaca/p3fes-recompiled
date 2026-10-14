@@ -185,6 +185,8 @@ namespace ps2recomp
         bool patchCop0 = true;
         bool patchCache = true;
         std::vector<std::string> skipFunctions;
+        // Functions whose names match a runtime HLE stub but must stay guest code.
+        std::vector<std::string> keepGuestFunctions;
         std::unordered_map<uint32_t, std::string> patches;
         std::vector<std::string> stubImplementations;
         std::vector<std::string> entryPointHints;

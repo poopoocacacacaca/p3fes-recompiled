@@ -864,6 +864,14 @@ namespace ps2recomp
                     m_skipFunctionStarts.insert(*selector.start);
                 }
             }
+            for (const auto &name : m_config.keepGuestFunctions)
+            {
+                const FunctionSelector selector = parseFunctionSelector(name);
+                if (!selector.name.empty())
+                    m_keepGuestFunctions[selector.name] = true;
+                if (selector.start.has_value())
+                    m_keepGuestStarts.insert(*selector.start);
+            }
             for (const auto &name : m_config.stubImplementations)
             {
                 const FunctionSelector selector = parseFunctionSelector(name);
@@ -2221,6 +2229,10 @@ namespace ps2recomp
 
     bool PS2Recompiler::isStubFunction(const Function &function) const
     {
+        if (m_keepGuestStarts.contains(function.start) || m_keepGuestFunctions.contains(function.name))
+        {
+            return false;
+        }
         if (m_stubFunctionStarts.contains(function.start))
         {
             return true;

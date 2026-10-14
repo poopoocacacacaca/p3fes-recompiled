@@ -95,6 +95,10 @@ namespace ps2recomp
                 std::unique(config.entryPointHints.begin(), config.entryPointHints.end()),
                 config.entryPointHints.end());
 
+            if (general.contains("keep_guest") && general.at("keep_guest").is_array())
+            {
+                config.keepGuestFunctions = toml::find<std::vector<std::string>>(general, "keep_guest");
+            }
             if (general.contains("skip") && general.at("skip").is_array())
             {
                 config.skipFunctions = toml::find<std::vector<std::string>>(general, "skip");
