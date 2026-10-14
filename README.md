@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="p3fes/branding/recompiled.svg" alt="RECOMPILED: PS2 static recompilation, native PC port" width="100%">
-
 # Static Recompilation of Persona 3 FES (PS2)
 
 **An attempt at a static recompilation of *Shin Megami Tensei: Persona 3 FES* (NTSC-U `SLUS-21621`)**<br>
