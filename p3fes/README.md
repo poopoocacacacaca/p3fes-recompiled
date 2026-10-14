@@ -30,10 +30,7 @@ own disc and are generated locally.
 
 ## Status
 
-- Boots, memory card detection and saves (PCSX2-format 8 MB cards), controller
-- Opening FMV decodes correctly through the emulated IPU
-- Next: GS rendering performance (software rasterizer is the bottleneck),
-  title screen, widescreen, 60 FPS
+See the [project README](../README.md#status).
 
 ## License
 
