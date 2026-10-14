@@ -53,10 +53,10 @@ namespace ps2recomp
             case COP1_S_MUL:
                 return fmt::format("ctx->f[{}] = FPU_MUL_S(ctx->f[{}], ctx->f[{}]);", fd, fs, ft);
             case COP1_S_DIV:
-                // GOW-Port: sin infinitos; dividir por cero da +/-FLT_MAX y pone D o I en FCR31 (fork de SotC, 8b51cb9).
+                // No infinities; dividing by zero gives +/-FLT_MAX and sets D or I in FCR31 (SotC fork, 8b51cb9).
                 return fmt::format("ctx->f[{}] = ps2FpuDivide(ctx->fcr31, ctx->f[{}], ctx->f[{}]);", fd, fs, ft);
             case COP1_S_SQRT:
-                // GOW-Port: R5900 codifica el radicando en FT; FS no es la fuente de SQRT.S.
+                // the R5900 encodes the radicand in FT; FS is not the source of SQRT.S.
                 return fmt::format("ctx->f[{}] = ps2FpuSqrt(ctx->fcr31, ctx->f[{}]);", fd, ft);
             case COP1_S_ABS:
                 return fmt::format("ctx->f[{}] = FPU_ABS_S(ctx->f[{}]);", fd, fs);
@@ -75,7 +75,7 @@ namespace ps2recomp
             case COP1_S_CVT_W:
                 return fmt::format("{{ int32_t tmp = FPU_CVT_W_S(ctx->f[{}]); std::memcpy(&ctx->f[{}], &tmp, sizeof(tmp)); }}", fs, fd);
             case COP1_S_RSQRT:
-                // GOW-Port: RSQRT.S calcula FS/sqrt(FT), no la inversa de sqrt(FS).
+                // RSQRT.S computes FS/sqrt(FT), not the reciprocal of sqrt(FS).
                 return fmt::format("ctx->f[{}] = ps2FpuRsqrt(ctx->fcr31, ctx->f[{}], ctx->f[{}]);", fd, fs, ft);
             case COP1_S_ADDA:
                 return fmt::format("FPU_SET_ACC(ctx, FPU_ADD_S(ctx->f[{}], ctx->f[{}]));", fs, ft);

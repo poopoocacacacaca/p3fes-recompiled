@@ -539,7 +539,7 @@ namespace GSMem
 	}
 
 	void InitLookupTables();
-    // GOW-Port: ac9efa0; tablas para el direccionamiento del backend OpenGL.
+    // ac9efa0; addressing tables for the OpenGL backend.
     const u16* PageTableData(PixelStorageMode psm);
 
     // Shares swizzle, VRAM wrapping, and lane extraction with the direct reads.

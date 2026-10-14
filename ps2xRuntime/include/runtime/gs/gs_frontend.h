@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "runtime/gs/gs_backend.h"
-#include "runtime/gs/ps2_gif_arbiter.h" // GOW-Port: conservar el origen de cada flujo GIF.
+#include "runtime/gs/ps2_gif_arbiter.h" // keep the origin of each GIF stream.
 
 namespace GSSharedPresent { struct Frame; }
 
@@ -99,8 +99,8 @@ struct GSDebugHistoryEntry
     bool usedPreferred = false;
 };
 
-// GOW-Port: observador opcional; los bytes prestados solo viven durante la llamada.
-// No devuelve IRQ/FIFO ni cambia la autoridad del GS del runtime. No reentrar en GS.
+// Optional observer; the borrowed bytes only live for the duration of the call.
+// It returns no IRQ/FIFO and does not change the runtime GS's authority. Do not re-enter the GS.
 struct GSRegisters;
 struct GSExternalObserver
 {
@@ -119,7 +119,7 @@ public:
 
     void init(uint8_t *vram, uint32_t vramSize, struct GSRegisters *privRegs = nullptr);
     void reset();
-    // GOW-Port: enlazar antes de ejecutar el EE; el consumidor empieza con VRAM vacía.
+    // attach before running the EE; the consumer starts with empty VRAM.
     void setExternalObserver(std::shared_ptr<GSExternalObserver> observer);
     bool hasExternalObserver() const;
     void notifyExternalVSync(uint64_t tick, uint32_t field);
@@ -127,14 +127,14 @@ public:
 
     void processGIFPacket(const uint8_t *data, uint32_t sizeBytes, GifPathId path = GifPathId::Path1);
     bool processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes, GifPathId path = GifPathId::Path1);
-    bool hasPendingGIFPacket(GifPathId path) const; // GOW-Port: los atajos DMA no pueden saltarse un flujo pendiente.
+    bool hasPendingGIFPacket(GifPathId path) const; // DMA shortcuts must not skip a pending stream.
     void uploadImageNative(uint64_t bitbltbuf,
                            uint64_t trxpos,
                            uint64_t trxreg,
                            uint64_t trxdir,
                            const uint8_t *data,
                            uint32_t sizeBytes,
-                           uint64_t setupGifTag = 0u); // GOW-Port: efectos del setup validado por DMA.
+                           uint64_t setupGifTag = 0u); // effects of the DMA-validated setup.
     void writeRegister(uint8_t regAddr, uint64_t value);
 
     const uint8_t *lockDisplaySnapshot(uint32_t &outSize);
@@ -151,7 +151,7 @@ public:
     void setDebugHistoryPaused(bool paused);
     bool getPreferredDisplaySource(GSFrameReg &outSource, uint32_t &outDestFbp) const;
     void latchHostPresentationFrame();
-    // GOW-Port: el host registra la textura adquirida, nunca el request posterior.
+    // the host records the acquired texture, never the later request.
     bool usesSharedPresentation() const;
     void recordAcquiredSharedFrame(const GSSharedPresent::Frame &frame);
     bool copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
@@ -208,7 +208,7 @@ private:
     mutable std::mutex m_backendLifetimeMutex;
     mutable std::mutex m_presentationMutex;
 
-    // GOW-Port: cursor acotado por PATH, sin almacenar paquetes ni payloads completos.
+    // cursor bounded per PATH, without storing whole packets or payloads.
     struct GifInputState
     {
         std::array<uint8_t, 16> partial{};
@@ -265,7 +265,7 @@ private:
     uint32_t m_hostPresentationSourceFbp = 0;
     bool m_hostPresentationUsedPreferred = false;
     bool m_hasHostPresentationFrame = false;
-    // GOW-Port: la captura explicita conserva el CRTC del ultimo latch; GL sigue en el worker.
+    // an explicit capture keeps the CRTC of the last latch; GL stays on the worker.
     GSPresentationRequest m_hostPresentationRequest{};
     bool m_hasHostPresentationRequest = false;
     bool m_hostPresentationRequestIsShared = false;
@@ -285,7 +285,7 @@ private:
     uint64_t m_debugLastVsyncTick = UINT64_MAX;
     bool m_debugHistoryPaused = true;
 
-    std::shared_ptr<GSExternalObserver> m_externalObserver; // GOW-Port: vida independiente de los callbacks.
+    std::shared_ptr<GSExternalObserver> m_externalObserver; // lifetime independent of the callbacks.
     std::unique_ptr<GSRasterBackend> m_backend;
 };
 

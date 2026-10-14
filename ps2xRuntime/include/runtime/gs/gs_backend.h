@@ -24,7 +24,7 @@ public:
     virtual void Sync(GSSyncReason reason) = 0;
     virtual PresentationFrame Present(const GSPresentationRequest &request) = 0;
 
-    // GOW-Port: capacidad efectiva por instancia; consultar no necesita un contexto GL.
+    // effective per-instance capability; querying it needs no GL context.
     virtual bool UsesSharedPresentation() const { return false; }
 
     virtual bool ClearFramebuffer(const GSContext &context, uint32_t rgba) = 0;

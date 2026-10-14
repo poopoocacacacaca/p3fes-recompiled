@@ -1,5 +1,5 @@
-// GOW-Port: adaptado de Taylor N. Albarnaz / LightVelox (GPL-3.0).
-// Origen: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
+// Adapted from Taylor N. Albarnaz / LightVelox (GPL-3.0).
+// Source: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
 #pragma once
 
 #include <cstdint>
@@ -15,15 +15,15 @@ namespace GSSharedPresent
         uint64_t renderSequence = 0;
         uint64_t contentHash = 0;
         bool hashValid = false;
-        // GOW-Port: conservar la selección CRTC sin descargar la imagen al host.
+        // keep the CRTC selection without downloading the image to the host.
         uint32_t displayFbp = 0;
         uint32_t sourceFbp = 0;
         bool usedPreferred = false;
-        // GOW-Port: los diagnósticos usan el tick de esta imagen, no otro request posterior.
+        // diagnostics use this image's tick, not a later request's.
         uint64_t vsyncTick = 0;
-        // GOW-Port: PMODE apagado equivale a PresentationFrame vacío para el host.
+        // PMODE off is an empty PresentationFrame for the host.
         bool blank = false;
-        // GOW-Port: modo del request que produjo esta textura, no del CRTC posterior.
+        // mode of the request that produced this texture, not of the later CRTC.
         uint64_t smode2 = 0;
     };
 

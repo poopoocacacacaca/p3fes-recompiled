@@ -1,12 +1,12 @@
-// GOW-Port: adaptado de Taylor N. Albarnaz / LightVelox (GPL-3.0).
-// Origen: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
+// Adapted from Taylor N. Albarnaz / LightVelox (GPL-3.0).
+// Source: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
 #include "runtime/gs/gs_gpu_backend.h"
 #include "runtime/gs/gs_shared_present.h"
 #include "runtime/gs/gs_swizzle.h"
 #include "runtime/gs/ps2_gs_memory.h"
 #include "../gs_gpu_helpers.h"
-#include "../gs_gpu_profile.h" // GOW-Port: ventanas de perfil sin esperas durante el render.
-#include "../gs_gpu_upload_ring.h" // GOW-Port: no reutilizar uploads de una GPU pendiente.
+#include "../gs_gpu_profile.h" // profile windows without waits during rendering.
+#include "../gs_gpu_upload_ring.h" // do not reuse uploads from a pending GPU.
 #include "../gs_sprite_rules.h"
 #include "../gs_triangle_rules.h"
 #include "gs_gl.h"
@@ -37,7 +37,7 @@ using namespace GSCpuInternal;
 
 namespace
 {
-    // GOW-Port: la preparación GS conserva el redondeo del productor EE/VU.
+    // GS setup keeps the EE/VU producer's rounding.
     class GSGpuRoundingScope
     {
         const unsigned rounding = _mm_getcsr() & _MM_ROUND_MASK;
@@ -53,8 +53,8 @@ namespace
                 _mm_setcsr((_mm_getcsr() & ~_MM_ROUND_MASK) | rounding);
         }
     };
-    // GOW-Port: el frontend existente consume filas de 640 píxeles, incluso con CRTC menor.
-    PresentationFrame gowPresentationRows(PresentationFrame frame)
+    // the existing frontend consumes 640-pixel rows, even with a smaller CRTC.
+    PresentationFrame presentationRows(PresentationFrame frame)
     {
         if (frame.pixels.empty() || frame.width == 640u)
             return frame;
@@ -74,7 +74,7 @@ namespace
     constexpr uint32_t kPages = 512u;
     constexpr uint32_t kShadowPages = 512u;
     constexpr uint32_t kMaxEpochs = 256u;
-    // GOW-Port: el frontend de GoW usa filas de 640 píxeles.
+    // the frontend uses 640-pixel rows.
     constexpr uint32_t kMaxPresentationWidth = 640u;
     constexpr uint32_t kMaxPresentationHeight = 2048u;
 
@@ -167,7 +167,7 @@ namespace
         uint32_t width = 0;
         uint32_t height = 0;
         uint32_t displayFbp = 0;
-        // GOW-Port: conservar la procedencia de la imagen en el readback diferido.
+        // keep the image's provenance in the deferred readback.
         uint32_t sourceFbp = 0;
         bool usedPreferred = false;
         uint64_t sequence = 0u;
@@ -213,9 +213,8 @@ namespace
         return c;
     }
 
-    // GOW-Port: fuera del ancho de fila, o tras 512 paginas logicas, XY deja
-    // de identificar un pixel unico de VRAM. La base alineada puede volver
-    // por 4 MiB sin alias si las coordenadas siguen dentro de ese dominio.
+    // Beyond the row width, or after 512 logical pages, XY no longer identifies a unique VRAM pixel. The aligned
+    // base can wrap at 4 MiB without aliasing if the coordinates stay within that domain.
     bool targetCoordinatesMayAlias(uint32_t psm, uint32_t bw, int x1, int y1)
     {
         const GSSwizzle::Format &f = GSSwizzle::GetFormat(psm);
@@ -344,10 +343,10 @@ struct GSGpuBackend::Impl
     std::vector<uint32_t> tileHeaders;
     std::vector<uint32_t> tileList;
     std::bitset<kPages> writePages;
-    // GOW-Port: color y profundidad pueden compartir VRAM con swizzles distintos.
+    // color and depth can share VRAM with different swizzles.
     std::bitset<kPages> colorPages;
     std::bitset<kPages> depthAccessPages;
-    // GOW-Port: riesgo acumulado por destino; solo separa paginas solapadas.
+    // accumulated risk per target; only separates overlapping pages.
     bool colorCoordinatesAlias = false;
     bool depthCoordinatesAlias = false;
     std::bitset<kPages> batchClutPages;
@@ -368,7 +367,7 @@ struct GSGpuBackend::Impl
     GLuint pageMapBuffer = 0;
     std::bitset<kPages> readPages;
     bool cacheTexturePages = true;
-    bool feedbackSnapshot = false; // GOW-Port: politica experimental, desactivada por defecto.
+    bool feedbackSnapshot = false; // experimental policy, off by default.
     bool fastTriangleSetup = true;
     bool texturePagesValid = false;
     std::array<uint32_t, 8> texturePagesKey{};
@@ -389,7 +388,7 @@ struct GSGpuBackend::Impl
     PresentationFrame lastFrame;
     uint64_t contentRevision = 1u;
     uint64_t presentedRevision = 0u;
-    // GOW-Port: incluir la fuente preferida en la clave de presentación compartida.
+    // include the preferred source in the shared presentation key.
     std::array<uint64_t, 11> presentedCrtc{};
     uint64_t renderedSequence = 0u;
 
@@ -415,7 +414,7 @@ struct GSGpuBackend::Impl
         uint32_t composites = 0u;
     } presentStats;
 
-    GSGpuProfile::Queue prof; // GOW-Port: contadores y timestamps de la misma ventana.
+    GSGpuProfile::Queue prof; // counters and timestamps from the same window.
 
     void flushFor(uint32_t reason)
     {
@@ -467,7 +466,7 @@ struct GSGpuBackend::Impl
         profCollect(false);
     }
 
-    // GOW-Port: QUERY_RESULT solo se lee tras AVAILABLE; esperar se reserva al cierre.
+    // QUERY_RESULT is only read after AVAILABLE; waiting is reserved for shutdown.
     void profCollect(bool wait)
     {
         prof.collect(
@@ -548,7 +547,7 @@ struct GSGpuBackend::Impl
 
     GSTransferCommand transfer{};
     GSTransferSnapshot transferState{};
-    GSUpload24State upload24{}; // GOW-Port: pixel de 24 bits pendiente entre bloques IMAGE.
+    GSUpload24State upload24{}; // 24-bit pixel pending between IMAGE blocks.
     std::vector<uint8_t> localToHost;
     size_t localToHostReadPos = 0u;
     std::vector<uint32_t> scratch;
@@ -569,8 +568,8 @@ struct GSGpuBackend::Impl
     ~Impl()
     {
         stopCompileWorker();
-        // GOW-Port: el host puede conservar el share group; liberar también si
-        // la compilación de shaders falló después de crear y mapear el ring.
+        // The host may keep the share group; also free when shader compilation failed after creating and mapping
+        // the ring.
         if (context.Valid() && ringBuffer != 0u)
         {
             ring.releaseFences([this](GLsync fence) { gl().DeleteSync(fence); });
@@ -580,7 +579,7 @@ struct GSGpuBackend::Impl
         if (initialized && prof.enabled)
         {
             prof.finish();
-            profCollect(true); // GOW-Port: esperar solo al destruir el contexto.
+            profCollect(true); // only wait when destroying the context.
         }
         if (initialized)
         {
@@ -650,7 +649,7 @@ struct GSGpuBackend::Impl
         {
             const char *reason = ring.failure() == GSGpuUpload::Failure::Timeout ? "wait timeout" :
                                  ring.failure() == GSGpuUpload::Failure::NullFence ? "fence creation failed" : "wait failed";
-            // GOW-Port: fallback de uploads, no certifica recuperación de un contexto perdido.
+            // upload fallback; it does not certify recovery from a lost context.
             std::fprintf(stderr, "[gs-gpu] persistent uploads disabled (%s); using streaming buffers\n", reason);
         }
         return offset;
@@ -674,8 +673,8 @@ struct GSGpuBackend::Impl
         const size_t allocated = std::max<size_t>(size, 16u);
         gl().BindBuffer(kShaderStorageBuffer, buffer);
         gl().BufferData(kShaderStorageBuffer, static_cast<GLsizeiptr>(allocated), nullptr, kStreamDraw);
-        // GOW-Port: un upload streaming puede encoger el buffer de salida;
-        // reserveData debe conocer su tamaño real al volver a presentar o copiar.
+        // A streaming upload can shrink the output buffer; reserveData must know its real size when presenting or
+        // copying again.
         if (buffer == dataBuffer)
             dataCapacity = allocated;
         if (size != 0u && data)
@@ -1254,10 +1253,10 @@ struct GSGpuBackend::Impl
             return false;
         body += shading;
         hwFragmentHead = version + "#extension GL_ARB_fragment_shader_interlock : require\n";
-        // GOW-Port: conservar la variante anterior para comparaciones de imagen y rendimiento.
+        // keep the previous variant for image and performance comparisons.
         const char *discardSetting = std::getenv("PS2X_GS_HW_DISCARD_UNCOVERED");
         if (discardSetting && *discardSetting == '0')
-            hwFragmentHead += "#define GOW_HW_KEEP_UNCOVERED\n";
+            hwFragmentHead += "#define PS2X_HW_KEEP_UNCOVERED\n";
         std::string common = GSGpuShaders::kCommon;
         const std::string vramDeclaration = "layout(std430, binding = 0) buffer VramBuffer";
         if (common.find(vramDeclaration) == std::string::npos)
@@ -1605,8 +1604,8 @@ struct GSGpuBackend::Impl
                     g.UseProgram(run.program->id);
                     g.Uniform4ui(run.program->loc[0], epoch, 0u, 0u, 0u);
                     g.Uniform4ui(run.program->loc[1], hwConservative ? 1u : 0u, 0u, 0u, 0u);
-                    // GOW-Port: cada variante hardware tiene su consulta y su estado;
-                    // un lote puede contener distintas flags aunque comparta destino.
+                    // Each hardware variant has its own query and state; a batch can contain different flags even when it shares
+                    // a target.
                     if (prof.enabled)
                     {
                         const uint32_t stateIndex = prims[static_cast<size_t>(run.first) * kPrimWords] >> 8u;
@@ -1679,8 +1678,8 @@ struct GSGpuBackend::Impl
             bindUpload(6u, tileListBuffer, tileList.data(), tileList.size() * sizeof(uint32_t));
             g.UseProgram(raster.id);
             g.Uniform4ui(raster.loc[0], epoch, 0u, 0u, 0u);
-            // GOW-Port: adjuntar los datos antes de profEnd, que puede resolver
-            // y vaciar las 4096 consultas pendientes. El trabajo CPU queda fuera del timestamp.
+            // Attach the data before profEnd, which can resolve and drain the 4096 pending queries. CPU work stays
+            // outside the timestamp.
             if (prof.enabled)
             {
                 prof.pairs += tileList.size();
@@ -1771,12 +1770,10 @@ struct GSGpuBackend::Impl
             markPages(depth, ctx.zbuf.psm, ctx.zbuf.zbp << 5u, fbw, x0, y0, x1, y1);
         const bool colorAlias = targetCoordinatesMayAlias(ctx.frame.psm, fbw, x1, y1);
         const bool depthAlias = depth.any() && targetCoordinatesMayAlias(ctx.zbuf.psm, fbw, x1, y1);
-        // GOW-Port: orden entre primitivas cuando color y Z reinterpretan las mismas
-        // paginas. El orden por pixel del shader no protege alias entre otros pixels.
-        // Es conservador por pagina; no resuelve alias internos de una sola primitiva.
-        // GOW-Port: el orden por XY tampoco protege dos direcciones del mismo
-        // color/Z que coinciden por stride o wrap. Conservar el lote habitual
-        // y el caso fuera de ancho pero con paginas fisicas disjuntas.
+        // Ordering between primitives when color and Z reinterpret the same pages. Per-pixel shader ordering does
+        // not protect aliasing between other pixels. Conservative per page; does not resolve aliasing within a single
+        // primitive. Ordering by XY does not protect two color/Z addresses that coincide through stride or wrap either.
+        // Keep the usual batch and the out-of-width case with disjoint physical pages.
         if ((color & depthAccessPages).any() || (depth & colorPages).any() ||
             ((colorAlias || colorCoordinatesAlias) && (color & colorPages).any()) ||
             ((depthAlias || depthCoordinatesAlias) && (depth & depthAccessPages).any()))
@@ -1790,8 +1787,8 @@ struct GSGpuBackend::Impl
         if (state.prim.tme)
         {
             const uint64_t clamp = ctx.clamp;
-            // GOW-Port: REGION_CLAMP lee MIN..MAX; REGION_REPEAT produce MAX..(MIN|MAX).
-            // Conservar los huecos dentro del rectangulo y el rango completo si MIN>MAX.
+            // REGION_CLAMP reads MIN..MAX; REGION_REPEAT produces MAX..(MIN|MAX).
+            // Keep the holes inside the rectangle and the full range when MIN>MAX.
             const auto bounds = [](uint32_t mode, int size, uint32_t minimum, uint32_t maximum)
             {
                 if (mode == 2u && minimum <= maximum)
@@ -1804,7 +1801,7 @@ struct GSGpuBackend::Impl
                                   static_cast<uint32_t>((clamp >> 4) & 1023u), static_cast<uint32_t>((clamp >> 14) & 1023u));
             const auto v = bounds(static_cast<uint32_t>((clamp >> 2) & 3u), state.textureHeight,
                                   static_cast<uint32_t>((clamp >> 24) & 1023u), static_cast<uint32_t>((clamp >> 34) & 1023u));
-            // GOW-Port: ambos extremos invalidan la clave, tambien cuando solo cambia MIN.
+            // both ends invalidate the key, also when only MIN changes.
             const std::array<uint32_t, 8> key{ctx.tex0.psm, ctx.tex0.tbp0, ctx.tex0.tbw,
                                              static_cast<uint32_t>(u[0]), static_cast<uint32_t>(u[1]),
                                              static_cast<uint32_t>(v[0]), static_cast<uint32_t>(v[1]), 0u};
@@ -1829,9 +1826,8 @@ struct GSGpuBackend::Impl
         const auto feedback = read & write;
         if (feedbackSnapshot && feedback.any())
         {
-            // GOW-Port: fuente disjunta para este Submit, no una emulacion de la cache PS2.
-            // Completar dibujos anteriores antes de copiar; preservar el epoch ANTERIOR
-            // en el estado evita que el sampler vuelva a leer la VRAM que escribe.
+            // Disjoint source for this Submit, not an emulation of the PS2 cache. Finish earlier draws before copying;
+            // keeping the PREVIOUS epoch in the state stops the sampler from reading the VRAM it writes.
             if (primCount != 0u || !clutOps.empty())
                 flushFor(1u);
             textureEpoch = epoch;
@@ -1839,7 +1835,7 @@ struct GSGpuBackend::Impl
             {
                 flushFor(1u);
                 textureEpoch = epoch;
-                copyOnWrite(feedback); // Tras reset caben las 512 paginas posibles.
+                copyOnWrite(feedback); // After a reset all 512 possible pages fit.
             }
         }
         writePages |= write;
@@ -2029,7 +2025,7 @@ struct GSGpuBackend::Impl
         }
         p[9] = static_cast<uint32_t>(tri.winding);
         p[10] = fbits(static_cast<float>(tri.invArea));
-        // GOW-Port: conservar el recíproco double; p[33..34] estaban libres.
+        // keep the double reciprocal; p[33..34] were free.
         std::memcpy(p + 33, &tri.invArea, sizeof(tri.invArea));
         std::memcpy(p + 11, &v0.z, 8u);
         std::memcpy(p + 13, &v1.z, 8u);
@@ -2607,7 +2603,7 @@ void GSGpuBackend::Reset()
     d.transfer.direction = 3u;
     d.transferState = {};
     d.transferState.direction = 3u;
-    d.upload24 = {}; // GOW-Port: reset descarta el pixel incompleto.
+    d.upload24 = {}; // reset drops the incomplete pixel.
     d.localToHost.clear();
     d.localToHostReadPos = 0u;
     if (d.hostVram && d.hostVramSize && d.ensure())
@@ -2696,7 +2692,7 @@ void GSGpuBackend::BeginTransfer(const GSTransferCommand &command)
         d.flushFor(3u);
     }
     d.transfer = command;
-    d.upload24 = {}; // GOW-Port: no heredar datos de otra transferencia.
+    d.upload24 = {}; // do not inherit data from another transfer.
     d.transferState.x = command.trxpos.dsax;
     d.transferState.y = command.trxpos.dsay;
     d.transferState.totalPixels = static_cast<uint32_t>(command.trxreg.rrw) * static_cast<uint32_t>(command.trxreg.rrh);
@@ -2734,8 +2730,8 @@ void GSGpuBackend::Sync(GSSyncReason reason)
     if (!d.hostVram || !d.hostVramSize || !d.ensure())
         return;
     d.flushFor(5u);
-    // GOW-Port: FINISH informa al EE solo tras completar el rasterizado en GL.
-    static const bool finishAsync = [] { const char *v = std::getenv("GOW_GS_FINISH_ASINCRONO"); return v && v[0] == '1'; }();
+    // FINISH is reported to the EE only after GL rasterization completes.
+    static const bool finishAsync = [] { const char *v = std::getenv("PS2X_GS_FINISH_ASYNC"); return v && v[0] == '1'; }();
     if (reason == GSSyncReason::Finish && !finishAsync)
         d.gl().Finish();
     if (reason == GSSyncReason::DebugReadback && d.hostVram)
@@ -2749,9 +2745,9 @@ PresentationFrame GSGpuBackend::Present(const GSPresentationRequest &request)
     if (!d.ensure())
         return result;
     d.flushBatch();
-    // GOW-Port: las capturas solicitadas conservan la lectura síncrona del CPU.
+    // requested captures keep the synchronous CPU read.
     const bool shared = !request.forceReadback && UsesSharedPresentation();
-    // GOW-Port: paridad real del GS en modo de campos; el modo progresivo no alterna.
+    // real GS parity in field mode; progressive mode does not alternate.
     const uint32_t fieldFlags = (request.smode2 & 3u) == 1u
         ? 1u | (static_cast<uint32_t>(request.vsyncTick & 1u) << 1u) : 0u;
     const std::array<uint64_t, 11> crtc = {request.pmode, request.smode2, request.dispfb1, request.display1,
@@ -2808,7 +2804,7 @@ PresentationFrame GSGpuBackend::Present(const GSPresentationRequest &request)
     result.height = height;
     auto pack = [](const CrtcCircuit &c, std::array<uint32_t, 12> &out)
     {
-        // GOW-Port: convertir las páginas DISPFB una sola vez; el shader recibe bloques.
+        // convert the DISPFB pages once; the shader receives blocks.
         out = {c.enabled ? 1u : 0u, c.fbp * 32u, c.fbw, c.psm, c.dbx, c.dby, static_cast<uint32_t>(c.dx), static_cast<uint32_t>(c.dy),
                static_cast<uint32_t>(c.dw), static_cast<uint32_t>(c.dh), static_cast<uint32_t>(c.hdiv), static_cast<uint32_t>(c.vdiv)};
     };
@@ -2819,12 +2815,12 @@ PresentationFrame GSGpuBackend::Present(const GSPresentationRequest &request)
     if (blank)
         result.displayFbp = 0u;
     result.sourceFbp = result.displayFbp;
-    // GOW-Port: igualar la selección del CPU sin cambiar el renderer de referencia.
-    // TEX0/preferredSource usa bloques de 256 B; DISPFB usa páginas de 8 KB.
+    // Match the CPU's selection without changing the reference renderer.
+    // TEX0/preferredSource use 256-byte blocks; DISPFB uses 8 KB pages.
     const auto &source = request.preferredSource;
     const bool sourceFormat = source.psm == GS_PSM_CT32 || source.psm == GS_PSM_CT24 ||
                               source.psm == GS_PSM_CT16 || source.psm == GS_PSM_CT16S;
-    // GOW-Port: mismo criterio de dirección física que CPU cuando TEX0 no tiene TBW.
+    // same physical-address rule as the CPU when TEX0 has no TBW.
     if (circuits[0].enabled != circuits[1].enabled && request.hasPreferredSource && sourceFormat &&
         request.preferredDestFbp == result.displayFbp &&
         (source.fbw != 0u || source.fbp != result.displayFbp * 32u))
@@ -2867,10 +2863,10 @@ PresentationFrame GSGpuBackend::Present(const GSPresentationRequest &request)
         return {};
     }
     if (!request.forceReadback && s_asyncPresent.load(std::memory_order_relaxed))
-        return gowPresentationRows(d.presentAsync(width, height, result.displayFbp, result.sourceFbp, result.usedPreferred));
+        return presentationRows(d.presentAsync(width, height, result.displayFbp, result.sourceFbp, result.usedPreferred));
     result.pixels.resize(static_cast<size_t>(width) * height * 4u);
     d.readData(result.pixels.data(), result.pixels.size());
-    return gowPresentationRows(std::move(result));
+    return presentationRows(std::move(result));
 }
 
 bool GSGpuBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba)
@@ -3002,7 +2998,7 @@ bool GSGpuBackend::ExportState(GSBackendState &out)
 bool GSGpuBackend::ImportState(const GSBackendState &state)
 {
     Impl &d = *m_impl;
-    if (state.upload24.size >= 3u) return false; // GOW-Port: solo hay uno o dos bytes pendientes.
+    if (state.upload24.size >= 3u) return false; // only one or two bytes are pending.
     if (!d.ensure())
         return false;
     d.flushBatch();

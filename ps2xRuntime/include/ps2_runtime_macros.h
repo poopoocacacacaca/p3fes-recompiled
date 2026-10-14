@@ -140,9 +140,10 @@ static inline uint32_t ps2_plzcw32(uint32_t x)
 #define PS2_PXOR(a, b) _mm_xor_si128((__m128i)(a), (__m128i)(b))
 #define PS2_PNOR(a, b) _mm_xor_si128(_mm_or_si128((__m128i)(a), (__m128i)(b)), _mm_set1_epi32(0xFFFFFFFF))
 
-// GOW-Port: semantica de la FPU (COP1) y de VU0 en modo macro del PS2: no hay NaN ni infinitos (se satura al maximo
-// finito), suma/resta sin bits de guarda, division y raices con flags de FCR31 y comparaciones sobre el patron de bits.
-// Tomado del port de Shadow of the Colossus (TaylorNAlbarnaz/PS2Recomp, rama sotc-port: 8b51cb9, 9bb389e, c419f26).
+// PS2 FPU (COP1) and VU0 macro-mode semantics: no NaNs or infinities (results saturate to the largest finite
+// value), add/subtract without guard bits, division and roots set FCR31 flags, and comparisons work on the bit
+// pattern. Taken from the Shadow of the Colossus port (TaylorNAlbarnaz/PS2Recomp, sotc-port branch: 8b51cb9,
+// 9bb389e, c419f26).
 inline __m128 ps2VuClampVector(__m128 value)
 {
     const __m128i bits = _mm_castps_si128(value);
@@ -413,7 +414,7 @@ static inline uint64_t Ps2FastRead64(const uint8_t *rdram, uint32_t addr)
 
 static inline __m128i Ps2FastRead128(const uint8_t *rdram, uint32_t addr)
 {
-    // GOW-Port: LQ/SQ/LQC2/SQC2 ignoran los 4 bits bajos de la direccion (fork de SotC, 9bb389e).
+    // LQ/SQ/LQC2/SQC2 ignore the low 4 address bits (SotC fork, 9bb389e).
     const uint32_t offset = addr & PS2_RAM_MASK & ~0xFu;
     if (!Ps2FastRangeIsContiguous(offset, sizeof(__m128i)))
     {
@@ -487,7 +488,7 @@ static inline void Ps2FastWrite64(uint8_t *rdram, uint32_t addr, uint64_t value)
 
 static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
 {
-    const uint32_t offset = addr & PS2_RAM_MASK & ~0xFu; // GOW-Port
+    const uint32_t offset = addr & PS2_RAM_MASK & ~0xFu;
     if (!Ps2FastRangeIsContiguous(offset, sizeof(__m128i)))
     {
         alignas(16) uint8_t wrapped[sizeof(__m128i)];
@@ -676,7 +677,7 @@ inline __m128i ps2_psubsw(__m128i a, __m128i b)
 #define PS2_PCEQB(a, b) _mm_cmpeq_epi8((__m128i)(a), (__m128i)(b))
 
 // Packed Absolute (PABS)
-// GOW-Port: PABSW/PABSH saturan el valor minimo (0x80000000 -> 0x7FFFFFFF, 0x8000 -> 0x7FFF) como el R5900 (PCSX2 MMI.cpp).
+// PABSW/PABSH saturate the minimum value (0x80000000 -> 0x7FFFFFFF, 0x8000 -> 0x7FFF) as the R5900 does (PCSX2 MMI.cpp).
 inline __m128i ps2_pabsw(__m128i a)
 {
     const __m128i r = _mm_abs_epi32(a);
@@ -738,7 +739,7 @@ inline __m128i ps2_ppacb(__m128i rs, __m128i rt)
 #define PS2_PPACB(a, b) ps2_ppacb((__m128i)(a), (__m128i)(b))
 
 // Packed Interleave (PINT)
-// GOW-Port: PINTH intercala la mitad baja de rt con la ALTA de rs; PINTEH intercala las medias palabras pares de rt y rs
+// PINTH interleaves the low half of rt with the HIGH half of rs; PINTEH interleaves the even halfwords of rt and rs
 // (a = rs, b = rt; PCSX2 MMI.cpp).
 #define PS2_PINTH(a, b) _mm_unpacklo_epi16((__m128i)(b), _mm_srli_si128((__m128i)(a), 8))
 #define PS2_PINTEH(a, b) _mm_or_si128(_mm_and_si128((__m128i)(b), _mm_set1_epi32(0x0000FFFF)), _mm_slli_epi32((__m128i)(a), 16))
@@ -747,8 +748,8 @@ inline __m128i ps2_ppacb(__m128i rs, __m128i rt)
 #define PS2_PMADDW(a, b) _mm_add_epi32(_mm_mullo_epi32(_mm_shuffle_epi32((__m128i)(a), _MM_SHUFFLE(1, 0, 3, 2)), _mm_shuffle_epi32((__m128i)(b), _MM_SHUFFLE(1, 0, 3, 2))), _mm_mullo_epi32(_mm_shuffle_epi32((__m128i)(a), _MM_SHUFFLE(3, 2, 1, 0)), _mm_shuffle_epi32((__m128i)(b), _MM_SHUFFLE(3, 2, 1, 0))))
 
 // Packed Variable Shifts
-// GOW-Port: PSLLVW/PSRLVW/PSRAVW desplazan rt (palabras 0 y 2) por rs y extienden el signo del resultado de 32 bits
-// a 64 (a = rs, b = rt; PCSX2 MMI.cpp). Antes se desplazaba rs y se usaban las cuatro palabras.
+// PSLLVW/PSRLVW/PSRAVW shift rt (words 0 and 2) by rs and sign-extend the 32-bit result to 64
+// (a = rs, b = rt; PCSX2 MMI.cpp). It used to shift rs and use all four words.
 inline __m128i ps2_pshiftvw(__m128i rs, __m128i rt, int kind)
 {
     alignas(16) uint32_t s[4], t[4];
@@ -995,9 +996,9 @@ inline __m128i ps2_qfsrv(__m128i rs, __m128i rt, uint32_t sa)
 }
 #define PS2_QFSRV(rs, rt, sa) ps2_qfsrv((__m128i)(rs), (__m128i)(rt), (uint32_t)(sa))
 #define PS2_PCPYLD(rs, rt) _mm_unpacklo_epi64(rt, rs)
-// GOW-Port: permutaciones del R5900 (PCSX2 MMI.cpp), de palabra baja a alta:
-// PEXEH [2,1,0,3 | 6,5,4,7], PREVH [3,2,1,0 | 7,6,5,4], PEXCH [0,2,1,3 | 4,6,5,7] (medias palabras),
-// PEXEW [2,1,0,3], PROT3W [1,2,0,3], PEXCW [0,2,1,3] (palabras).
+// R5900 permutations (PCSX2 MMI.cpp), from low word to high:
+// PEXEH [2,1,0,3 | 6,5,4,7], PREVH [3,2,1,0 | 7,6,5,4], PEXCH [0,2,1,3 | 4,6,5,7] (halfwords),
+// PEXEW [2,1,0,3], PROT3W [1,2,0,3], PEXCW [0,2,1,3] (words).
 #define PS2_PEXEH(rt) _mm_shufflelo_epi16(_mm_shufflehi_epi16((rt), _MM_SHUFFLE(3, 0, 1, 2)), _MM_SHUFFLE(3, 0, 1, 2))
 #define PS2_PREVH(rt) _mm_shufflelo_epi16(_mm_shufflehi_epi16((rt), _MM_SHUFFLE(0, 1, 2, 3)), _MM_SHUFFLE(0, 1, 2, 3))
 #define PS2_PEXCH(rt) _mm_shufflelo_epi16(_mm_shufflehi_epi16((rt), _MM_SHUFFLE(3, 1, 2, 0)), _MM_SHUFFLE(3, 1, 2, 0))
@@ -1074,10 +1075,10 @@ static inline void Ps2SetGprLow64(R5900Context *ctx, int reg, __m128i new_low)
             ctx_ptr->r[reg_idx] = (val);   \
     } while (0)
 
-// GOW-Port: PMULTH conserva ocho productos signed de 16x16 bits, sin sumarlos.
+// PMULTH keeps eight signed 16x16-bit products without adding them.
 // LO={p0,p1,p4,p5}, HI={p2,p3,p6,p7}; rd={p0,p2,p4,p6}.
-// hi/lo son las mitades bajas de 64 bits; hi1/lo1, las altas. Operandos
-// por valor: rd puede coincidir con rs/rt. rd=0 no elimina los efectos HI/LO.
+// hi/lo are the low 64-bit halves; hi1/lo1 the high ones. Operands are taken by value: rd may equal rs/rt.
+// rd=0 does not remove the HI/LO effects.
 inline void ps2_pmulth(R5900Context *ctx, __m128i rs, __m128i rt, unsigned rd)
 {
     int16_t a[8], b[8];

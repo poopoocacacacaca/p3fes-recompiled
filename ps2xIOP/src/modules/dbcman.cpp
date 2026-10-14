@@ -56,8 +56,8 @@ namespace ps2x::iop::detail
                 RpcResult result;
                 if (request.sid != kDbcManSid)
                 {
-                    // GOW-Port: servidores secundarios de dbcman (puertos/sockets del DualShock).
-                    // Responden con un buffer en cero para que libdbc pueda enlazarse y seguir.
+                    // dbcman's secondary servers (DualShock ports/sockets). They reply with a zeroed buffer so libdbc can
+                    // bind and carry on.
                     if (request.sid == 0x8000131cu || request.sid == 0x8000131eu || request.sid == 0x8000131fu)
                     {
                         result.handled = true;

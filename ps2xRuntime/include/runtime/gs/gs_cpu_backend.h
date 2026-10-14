@@ -1,9 +1,9 @@
 #pragma once
 
 #include "runtime/gs/gs_backend.h"
-#include "runtime/gs/gs_backend_state.h" // GOW-Port: estado para repetir los mismos comandos.
+#include "runtime/gs/gs_backend_state.h" // state to replay the same commands.
 #include "runtime/gs/gs_texture_page_cache.h"
-#include "runtime/gs/gs_upload24.h" // GOW-Port: continuacion del pixel entre cargas.
+#include "runtime/gs/gs_upload24.h" // pixel continuation between uploads.
 
 #include <array>
 #include <mutex>

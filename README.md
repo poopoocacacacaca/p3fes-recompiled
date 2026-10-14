@@ -18,6 +18,16 @@
 > This repository **does not contain any game files** (ELF, IRX modules, `.CVM` archives) or the C++
 > generated from them. You need **your own copy** of Persona 3 FES (NTSC-U) and must generate the code locally.
 
+<p align="center">
+  <img src="p3fes/status/progress.svg" alt="Port progress: weighted phases toward a fully playable port, EE code translated, C decompilation progress and component status" width="100%">
+</p>
+
+The chart is generated from [`p3fes/status/status.toml`](p3fes/status/status.toml) by
+`p3fes/scripts/status_chart.py`. The overall figure is a weighted estimate of the phases listed (weights are effort
+guesses, not measurements). "EE code translated" is exact: every function of the executable is either recompiled to
+C++ or bound to a runtime implementation. The C decompilation bar is a different project (readable source code);
+this port does not depend on it.
+
 ## Goal
 
 A **fully playable static recompilation** of Persona 3 FES: *The Journey* and *The Answer*, from the opening
@@ -120,8 +130,9 @@ R3000A interpreter. The IOP kernel and libraries (`sysmem`, `loadcore`, `intrman
 ├── ps2xRecomp/             # Recompiler: R5900 decoder (rabbitizer) and C++ emitter
 ├── ps2xAnalyzer/           # ELF analyzer that proposes stubs/entry points
 ├── ps2xRuntime/            # EE runtime: kernel, DMAC, GS, VIF/VU, IPU, input, host window
+├── third_party/pcsx2/      # Subset of PCSX2 (GS, common/, libraries), commit 2954ebe
+├── third_party/pcsx2-gs/   # PCSX2's GS as a shared library with a C API (OpenGL + software renderers)
 ├── ps2xIOP/                # IOP: R3000A interpreter, HLE kernel/libraries, SPU2, SIO2
-├── ps2xTest/               # Runtime and IOP test suite
 └── PS2RECOMP_README.md     # Upstream PS2Recomp README
 ```
 
@@ -145,18 +156,23 @@ See [`p3fes/README.md`](p3fes/README.md). In short:
 | `PS2X_MEMCARD1=<path>` / `none` | Memory card image for slot 1 (default `memcards/Mcd001.ps2`) |
 | `PS2X_PAD_DEADZONE=0.15` | Analog stick deadzone |
 | `PS2X_HIDE_DEBUG_UI=1` | Hide the developer overlay |
-| `GOW_AUDIO=0` | Disable host audio output |
-| `GOW_AUDIO_PCM=<file>` | Dump emulated SPU2 output (s16le stereo 48 kHz) |
+| `PS2X_AUDIO=0` | Disable host audio output |
+| `PS2X_AUDIO_DUMP=<file>` | Dump emulated SPU2 output (s16le stereo 48 kHz) |
 | `PS2X_PROFILE=<file>` | Linux sampling profiler; summarise with `p3fes/scripts/prof_report.py` |
 
-Debug traces: `PS2X_IPU_TRACE`, `PS2X_DMA_LOG`, `PS2X_CD_LOG`, `PS2X_IOP_CD_LOG`, `PS2X_EE_TRACE_CALLS`,
+Debug traces: `PS2X_SPU2_DIAG`, `PS2X_GS_DIAG`, `PS2X_IPU_TRACE`, `PS2X_DMA_LOG`, `PS2X_CD_LOG`, `PS2X_IOP_CD_LOG`, `PS2X_EE_TRACE_CALLS`,
 `PS2X_LOG_SUSPEND`.
 
 ## Credits
 
 - [PS2Recomp](https://github.com/ran-j/PS2Recomp) by ran-j and contributors: recompiler and runtime.
 - [god-of-war-recomp](https://github.com/KIexster/god-of-war-recomp) by KIexster: 108 PS2Recomp patches
-  (OpenGL GS backend, SPU2, IOP and VU1 work, many EE/GS fixes). Their `GOW_` variable names are kept.
+  (SPU2, SIO2, IOP and VU1 work, many EE/GS fixes), merged into this tree with comments translated and
+  environment variables renamed to `PS2X_*`.
+- Taylor N. Albarnaz / LightVelox's Shadow of the Colossus fork of PS2Recomp: OpenGL GS backend, command queue,
+  FPU/VU0 semantics (via god-of-war-recomp).
+- [urban-reign-recomp](https://github.com/thiagordsfx/urban-reign-recomp) by thiagordsfx: the PCSX2 GS bridge
+  design (`third_party/pcsx2-gs`) this port adapts to OpenGL.
 - [PCSX2](https://github.com/PCSX2/pcsx2): the IPU is adapted from it, and it is the accuracy reference.
 - [ps2-web-recomp](https://github.com/snuri00/ps2-web-recomp): reference for SPU2, IPU and a GPU-compute GS.
 - The snaku Persona 3 FES decompilation, for function names.

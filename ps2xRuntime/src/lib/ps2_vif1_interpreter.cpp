@@ -247,8 +247,8 @@ void PS2Memory::processVIF1Data(uint32_t srcPhys, uint32_t sizeBytes)
     processVIF1Data(m_rdram + srcPhys, sizeBytes);
 }
 
-// GOW-Port: enviar los bytes originales; el cursor GIF por PATH conserva PACKED/REGLIST/IMAGE.
-// No anteponer otra etiqueta IMAGE a un payload que ya continua una etiqueta abierta.
+// Send the original bytes; the per-PATH GIF cursor keeps PACKED/REGLIST/IMAGE. Do not prepend another IMAGE tag to
+// a payload that already continues an open tag.
 void PS2Memory::submitVif1DirectPayload(const uint8_t *data, uint32_t sizeBytes, bool directHl)
 {
     submitGifPacket(GifPathId::Path2, data, sizeBytes, true, directHl);
@@ -260,12 +260,12 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         return;
 
     uint32_t pos = 0;
-    static const bool traceVif = std::getenv("GOW_VIF_DIAG") != nullptr;
+    static const bool traceVif = std::getenv("PS2X_VIF_DIAG") != nullptr;
 
     while (pos < sizeBytes)
     {
-        // GOW-Port: el tamaño del comando persiste entre bloques DMA y escrituras FIFO.
-        // Solo se acumulan payloads truncados; un DIRECT completo no necesita esta copia.
+        // The command size persists across DMA blocks and FIFO writes. Only truncated payloads are accumulated; a
+        // complete DIRECT needs no copy.
         if (m_vif1DirectBytesRemaining != 0u)
         {
             const uint32_t chunk = std::min<uint32_t>(m_vif1DirectBytesRemaining, sizeBytes - pos);
@@ -278,7 +278,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             {
                 static unsigned completed = 0u;
                 if (++completed <= 16u)
-                    std::fprintf(stderr, "[gow-vif-direct] completed=%u bytes=%u hl=%u\n", completed,
+                    std::fprintf(stderr, "[vif-direct] completed=%u bytes=%u hl=%u\n", completed,
                                  static_cast<uint32_t>(m_vif1DirectPayload.size()), m_vif1DirectHl ? 1u : 0u);
             }
             submitVif1DirectPayload(m_vif1DirectPayload.data(), static_cast<uint32_t>(m_vif1DirectPayload.size()), m_vif1DirectHl);
@@ -288,9 +288,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         }
         if (sizeBytes - pos < 4u)
             break;
-        // GOW-Port: adaptado de Claude, god-of-war-recomp 540defd. Una IMAGE pendiente de PATH2
-        // solo continua con la carga del siguiente DIRECT/DIRECTHL.
-        // Antes se tomaban como pixeles los codigos VIF que siguen al DIRECT y el flujo se desincronizaba.
+        // Adapted from god-of-war-recomp 540defd. A pending PATH2 IMAGE only continues with the payload of the next
+        // DIRECT/DIRECTHL. The VIF codes after the DIRECT used to be taken as pixels and the stream lost sync.
 
         uint32_t cmd;
         memcpy(&cmd, data + pos, 4);
@@ -308,7 +307,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             ++commands;
             if (irq) ++irqCommands;
             if (commands == 1u || (commands % 4096u) == 0u || (irq && irqCommands <= 32u))
-                std::fprintf(stderr, "[gow-vif] commands=%llu irq=%llu code=0x%08X offset=0x%X bytes=%u tops=%u\n",
+                std::fprintf(stderr, "[vif] commands=%llu irq=%llu code=0x%08X offset=0x%X bytes=%u tops=%u\n",
                              static_cast<unsigned long long>(commands), static_cast<unsigned long long>(irqCommands),
                              cmd, pos - 4u, sizeBytes, vif1_regs.tops);
         }
@@ -385,7 +384,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                     uint64_t lo = 0u, hi = 0u;
                     std::memcpy(&lo, m_vu1Data + runItop * 16u, 8u);
                     std::memcpy(&hi, m_vu1Data + runItop * 16u + 8u, 8u);
-                    std::fprintf(stderr, "[gow-vif-launch] launch=%u pc=0x%X top=%u itop=%u input=%016llX:%016llX offset=0x%X\n",
+                    std::fprintf(stderr, "[vif-launch] launch=%u pc=0x%X top=%u itop=%u input=%016llX:%016llX offset=0x%X\n",
                                  launches, startPC, runTop, runItop,
                                  static_cast<unsigned long long>(hi), static_cast<unsigned long long>(lo), pos - 4u);
                 }
@@ -471,7 +470,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         }
         else if (opcode == VIF_DIRECT || opcode == VIF_DIRECTHL)
         {
-            // GOW-Port: IMMEDIATE=0 significa 65536 QW, nunca más de 1 MiB.
+            // IMMEDIATE=0 means 65536 QW, never more than 1 MiB.
             const uint32_t payloadBytes = ((imm == 0u) ? 65536u : static_cast<uint32_t>(imm)) * 16u;
             const uint32_t availableBytes = sizeBytes - pos;
             const bool directHl = (opcode == VIF_DIRECTHL);
@@ -482,12 +481,12 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             }
             else
             {
-                // GOW-Port: sonda opcional acotada para comprobar cortes reales en el juego.
+                // optional bounded probe to check real cut-offs in the game.
                 if (traceVif)
                 {
                     static unsigned fragments = 0u;
                     if (++fragments <= 16u)
-                        std::fprintf(stderr, "[gow-vif-direct] fragmented=%u code=0x%08X bytes=%u available=%u\n",
+                        std::fprintf(stderr, "[vif-direct] fragmented=%u code=0x%08X bytes=%u available=%u\n",
                                      fragments, cmd, payloadBytes, availableBytes);
                 }
                 m_vif1DirectPayload.clear();
@@ -555,10 +554,10 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
             const bool zeroExtend = (imm & 0x4000u) != 0u;
 
-            // GOW-Port: UNPACK sin máscara, sin sumar la fila (STMOD 0/3) y con CL >= WL (cada escritura tiene su
-            // vector de origen): el bucle general de abajo lee el qword de destino, sustituye las componentes
-            // descomprimidas y lo escribe entero. Aquí se hace lo mismo por formato, sin las comprobaciones por
-            // componente. V3 conserva W de la memoria, V2 escribe XYXY y V1 repite X, como abajo.
+            // UNPACK without mask, without adding the row (STMOD 0/3) and with CL >= WL (each write has its source vector):
+            // the general loop below reads the destination qword, replaces the unpacked components and writes it whole. This
+            // does the same per format, without the per-component checks. V3 keeps W from memory, V2 writes XYXY and V1
+            // repeats X, as below.
             const uint32_t fastMode = vif1_regs.mode & 3u;
             const bool fastFormat = vl != 3u || vn == 3u;
             const bool fastUnpack = !maskEnable && cl >= wl && fastFormat &&
@@ -566,9 +565,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             if (fastUnpack && m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
             {
                 const uint8_t *srcBase = data + pos;
-                // GOW-Port: un bucle por formato (el formato no cambia dentro del UNPACK); mismo resultado que el
-                // bucle general por componente de antes: V4 escribe XYZW, V3 conserva W de la memoria, V2 escribe
-                // XYXY, V1 repite X y V4-5 expande RGBA5551.
+                // One loop per format (the format does not change within an UNPACK); same result as the old per-component
+                // loop: V4 writes XYZW, V3 keeps W from memory, V2 writes XYXY, V1 repeats X and V4-5 expands RGBA5551.
                 const auto unpackAll = [&](auto fill)
                 {
                     for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
@@ -671,11 +669,10 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 }
             }
 #if defined(_MSC_VER) || defined(__SSE4_1__)
-            // GOW-Port: UNPACK con máscara o sumando la fila (STMOD 1/2) y CL >= WL: lo mismo que el bucle general
-            // por componente de abajo, con SSE. Cada escritura descomprime su vector (las componentes que faltan,
-            // de la memoria; V2 escribe XYXY y V1 repite X), suma ROW a los campos que toman el dato (no en V4-5),
-            // actualiza ROW en STMOD 2 solo en esos campos y mezcla dato, ROW, COL o memoria según la máscara de
-            // su posición en el ciclo (como mucho la 3).
+            // UNPACK with a mask or adding the row (STMOD 1/2) and CL >= WL: the same as the general per-component loop
+            // below, with SSE. Each write unpacks its vector (missing components from memory; V2 writes XYXY and V1 repeats
+            // X), adds ROW to the fields that take the data (not for V4-5), updates ROW in STMOD 2 only in those fields and
+            // mixes data, ROW, COL or memory according to the mask of its position in the cycle (at most 3).
             else if (cl >= wl && fastFormat && m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
             {
                 const uint8_t *srcBase = data + pos;
@@ -683,7 +680,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 const bool canAdd = (vl != 3u || vn != 3u);
                 const bool addRow = canAdd && (mode == 1u || mode == 2u);
                 const uint32_t limit = static_cast<uint32_t>(components);
-                __m128i specMask[4][4]; // [posición en el ciclo][especificación 0..3]
+                __m128i specMask[4][4]; // [position in the cycle][spec 0..3]
                 __m128i colv[4];
                 for (uint32_t cyc = 0; cyc < 4u; ++cyc)
                 {
@@ -909,8 +906,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                     const uint32_t colIdx = (cyclePos > 3u) ? 3u : cyclePos;
                     const uint32_t maskCycle = (cyclePos > 3u) ? 3u : cyclePos;
 
-                    // GOW-Port: sin máscara, con datos y sin sumar la fila (STMOD 0/3), cada componente es el
-                    // valor descomprimido: el bucle por componente escribiría lo mismo.
+                    // without mask, with data and without adding the row (STMOD 0/3), each component is the unpacked value: the
+                    // per-component loop would write the same.
                     if (!maskEnable && decoded && handledFormat && (!canAdd || (mode != 1u && mode != 2u)))
                     {
                         std::memcpy(m_vu1Data + destOff, decompressed, sizeof(decompressed));

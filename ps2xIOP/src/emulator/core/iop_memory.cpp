@@ -13,8 +13,8 @@ namespace ps2x::iop::detail
         constexpr uint32_t kDmaStart = 1u << 24u;
         constexpr int kDmaSpu0Irq = 0x24;
         constexpr int kDmaSpu1Irq = 0x28;
-        constexpr uint32_t kDmaSio2InChcr = 0x1F801548u;  // GOW-Port: DMA 11
-        constexpr uint32_t kDmaSio2OutChcr = 0x1F801558u; // GOW-Port: DMA 12
+        constexpr uint32_t kDmaSio2InChcr = 0x1F801548u;  // DMA 11
+        constexpr uint32_t kDmaSio2OutChcr = 0x1F801558u; // DMA 12
         constexpr uint64_t kSio2TransferCycles = 256u;
 
         uint32_t alignUp(uint32_t value, uint32_t alignment)
@@ -26,7 +26,7 @@ namespace ps2x::iop::detail
     IopMemory::IopMemory()
         : m_ram(RamSize), m_owned(RamSize), m_scratch(ScratchSize)
     {
-        const char *sio2 = std::getenv("GOW_SIO2");
+        const char *sio2 = std::getenv("PS2X_SIO2");
         m_sio2Enabled = sio2 == nullptr || sio2[0] != '0';
         reset();
     }
@@ -54,7 +54,7 @@ namespace ps2x::iop::detail
             return m_ram[phys];
         if (phys >= ScratchBase && phys < ScratchBase + ScratchSize)
             return m_scratch[phys - ScratchBase];
-        if (m_sio2Enabled && phys == Sio2::RegFifoOut) // GOW-Port: lectura de un byte de la respuesta
+        if (m_sio2Enabled && phys == Sio2::RegFifoOut) // one byte of the reply
             return m_sio2.readFifo();
         const uint32_t value = readHardware32(phys & ~3u);
         return static_cast<uint8_t>(value >> ((phys & 3u) * 8u));
@@ -110,7 +110,7 @@ namespace ps2x::iop::detail
             m_scratch[phys - ScratchBase] = value;
             return;
         }
-        if (Spu2::contains(phys)) // GOW-Port: los registros del SPU2 son de 16 bits
+        if (Spu2::contains(phys)) // SPU2 registers are 16-bit
         {
             const uint32_t half = phys & ~1u;
             const uint32_t shift = (phys & 1u) * 8u;
@@ -118,7 +118,7 @@ namespace ps2x::iop::detail
             m_spu2.write16(half, static_cast<uint16_t>((current & ~(0xFFu << shift)) | (static_cast<uint32_t>(value) << shift)));
             return;
         }
-        if (m_sio2Enabled && phys == Sio2::RegFifoIn) // GOW-Port: un byte del comando
+        if (m_sio2Enabled && phys == Sio2::RegFifoIn) // one byte of the command
         {
             m_sio2.writeFifo(value);
             return;
@@ -139,7 +139,7 @@ namespace ps2x::iop::detail
             markOwned(phys, sizeof(value));
             return;
         }
-        if (Spu2::contains(phys) && (phys & 1u) == 0u) // GOW-Port: una sola escritura de 16 bits (KON, puerto de datos...)
+        if (Spu2::contains(phys) && (phys & 1u) == 0u) // a single 16-bit write (KON, data port...)
         {
             m_spu2.write16(phys, value);
             return;
@@ -307,8 +307,8 @@ namespace ps2x::iop::detail
         const uint32_t blockCount = std::max<uint32_t>(blockControl >> 16u, 1u);
         const uint64_t transferWords = static_cast<uint64_t>(wordsPerBlock) * blockCount;
 
-        // GOW-Port: copiar los datos de verdad entre la RAM del IOP (MADR) y la RAM de sonido (TSA del nucleo).
-        // CHCR bit 0 = 1: de memoria al SPU2. El estado (STATX 0x80) y la interrupcion diferida no cambian.
+        // Copy the data between IOP RAM (MADR) and sound RAM (the core's TSA). CHCR bit 0 = 1: memory to SPU2.
+        // The status (STATX 0x80) and the deferred interrupt are unchanged.
         uint32_t madr = 0u;
         if (const auto current = m_hardware.find(address - 8u); current != m_hardware.end())
             madr = physicalAddress(current->second) & (RamSize - 1u);
@@ -331,8 +331,8 @@ namespace ps2x::iop::detail
         });
     }
 
-    // GOW-Port: DMA 11 (memoria -> SIO2) y 12 (SIO2 -> memoria). Bloques de BCR&0xFFFF palabras, BCR>>16 bloques.
-    // Terminan en el acto: sio2man solo espera la interrupcion del SIO2.
+    // DMA 11 (memory -> SIO2) and 12 (SIO2 -> memory). BCR>>16 blocks of BCR&0xFFFF words.
+    // They finish at once: sio2man only waits for the SIO2 interrupt.
     void IopMemory::startSio2Dma(uint32_t chcrAddress, uint32_t value)
     {
         m_hardware[chcrAddress] = value & ~kDmaStart;

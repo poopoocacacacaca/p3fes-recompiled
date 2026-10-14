@@ -1,5 +1,5 @@
-// GOW-Port: adaptado de Taylor N. Albarnaz / LightVelox (GPL-3.0).
-// Origen: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
+// Adapted from Taylor N. Albarnaz / LightVelox (GPL-3.0).
+// Source: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
 #pragma once
 
 #include "runtime/gs/gs_backend.h"
@@ -78,7 +78,7 @@ private:
     void Execute(const std::vector<uint8_t> &chunk, GSPrimitiveBatch &draw);
 
     std::unique_ptr<GSRasterBackend> m_inner;
-    // GOW-Port: publicado por el worker tras Initialize, sin consultar GL desde el host.
+    // published by the worker after Initialize, without querying GL from the host.
     std::atomic<bool> m_sharedPresentation{false};
 
     mutable std::mutex m_producerMutex;

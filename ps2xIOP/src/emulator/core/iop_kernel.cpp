@@ -25,7 +25,7 @@ namespace ps2x::iop::detail
 
     void IopKernel::reset()
     {
-        ++m_version; // GOW-Port: invalida la caché de beginNextReady
+        ++m_version; // invalidates the beginNextReady cache
         m_threads.clear();
         m_semaphores.clear();
         m_eventFlags.clear();
@@ -37,7 +37,7 @@ namespace ps2x::iop::detail
 
     bool IopKernel::dispatchThreadImport(uint16_t ordinal, IopCpuState &cpu, uint64_t currentCycle)
     {
-        ++m_version; // GOW-Port: invalida la caché de beginNextReady
+        ++m_version; // invalidates the beginNextReady cache
         const auto setV0 = [&](int32_t value)
         {
             cpu.gpr[2] = static_cast<uint32_t>(value);
@@ -354,7 +354,7 @@ namespace ps2x::iop::detail
 
     bool IopKernel::dispatchSemaphoreImport(uint16_t ordinal, IopCpuState &cpu)
     {
-        ++m_version; // GOW-Port: invalida la caché de beginNextReady
+        ++m_version; // invalidates the beginNextReady cache
         const auto setV0 = [&](int32_t value)
         {
             cpu.gpr[2] = static_cast<uint32_t>(value);
@@ -420,10 +420,10 @@ namespace ps2x::iop::detail
             }
             else
             {
-                // GOW-Port: sin hilo actual (servidor RPC llamado desde el EE) no se puede bloquear. Antes se
-                // devolvia como si se hubiera obtenido el semaforo: 989snd tomaba asi su candado del tick mientras
-                // el hilo del tick lo tenia, el candado quedaba con un dueno imposible y el sonido se paraba
-                // ("Sound System Tick locked out"). Ahora corren los demas hilos hasta que el semaforo se libera.
+                // With no current thread (an RPC server called from the EE) we cannot block. This used to return as if
+                // the semaphore had been taken: 989snd took its tick lock that way while the tick thread held it, the lock
+                // ended up with an impossible owner and sound stopped ("Sound System Tick locked out"). Now the other
+                // threads run until the semaphore is released.
                 const auto available = [this, id]
                 {
                     const auto semaphore = m_semaphores.find(id);
@@ -438,7 +438,7 @@ namespace ps2x::iop::detail
                 }
                 else
                 {
-                    setV0(static_cast<uint32_t>(-419)); // KE_SEMA_ZERO: se agoto la espera o se borro el semaforo
+                    setV0(static_cast<uint32_t>(-419)); // KE_SEMA_ZERO: the wait timed out or the semaphore was deleted
                 }
             }
             return true;
@@ -530,7 +530,7 @@ namespace ps2x::iop::detail
 
     int IopKernel::createInternalEventFlag(uint32_t attr, uint32_t option, uint32_t bits)
     {
-        ++m_version; // GOW-Port: invalida la caché de beginNextReady
+        ++m_version; // invalidates the beginNextReady cache
         EventFlag event;
         event.id = static_cast<int>(m_nextEventFlagId++);
         event.attr = attr;
@@ -543,7 +543,7 @@ namespace ps2x::iop::detail
 
     bool IopKernel::setInternalEventFlag(int id, uint32_t bits)
     {
-        ++m_version; // GOW-Port: invalida la caché de beginNextReady
+        ++m_version; // invalidates the beginNextReady cache
         const auto event = m_eventFlags.find(id);
         if (event == m_eventFlags.end())
             return false;
@@ -554,7 +554,7 @@ namespace ps2x::iop::detail
 
     bool IopKernel::dispatchEventImport(uint16_t ordinal, IopCpuState &cpu)
     {
-        ++m_version; // GOW-Port: invalida la caché de beginNextReady
+        ++m_version; // invalidates the beginNextReady cache
         const auto setV0 = [&](int32_t value)
         {
             cpu.gpr[2] = static_cast<uint32_t>(value);
@@ -648,10 +648,10 @@ namespace ps2x::iop::detail
             }
             else
             {
-                // GOW-Port: sin hilo actual (servidor RPC) se esperaba en falso con KE_EVF_COND. mc2_d manda los
-                // comandos de la memory card desde el servidor RPC de dbcman y sio2man espera el fin de la
-                // transferencia con WaitEventFlag: leía la respuesta antes de que llegara y daba la tarjeta por
-                // ausente. Ahora corren los demás hilos hasta que se cumple la condición (como WaitSema).
+                // With no current thread (RPC server) this used to fail at once with KE_EVF_COND. mc2_d sends memory card
+                // commands from dbcman's RPC server and sio2man waits for the end of the transfer with WaitEventFlag: it read
+                // the reply before it arrived and reported the card as missing. Now the other threads run until the
+                // condition holds (as for WaitSema).
                 const int id = event->second.id;
                 const auto satisfied = [this, id, bits, mode]
                 {
@@ -708,7 +708,7 @@ namespace ps2x::iop::detail
 
     void IopKernel::sleepCurrent(IopCpuState &cpu)
     {
-        ++m_version; // GOW-Port: invalida la caché de beginNextReady
+        ++m_version; // invalidates the beginNextReady cache
         if (m_currentThread == nullptr)
             return;
         m_currentThread->state = IopThreadState::Sleep;
@@ -717,7 +717,7 @@ namespace ps2x::iop::detail
 
     void IopKernel::delayCurrentUntil(uint64_t wakeCycle, IopCpuState &cpu)
     {
-        ++m_version; // GOW-Port: invalida la caché de beginNextReady
+        ++m_version; // invalidates the beginNextReady cache
         if (m_currentThread == nullptr)
             return;
         m_currentThread->wakeCycle = wakeCycle;
@@ -728,10 +728,10 @@ namespace ps2x::iop::detail
     IopThread *IopKernel::beginNextReady(uint64_t currentCycle)
     {
         if (m_idleVersion == m_version && currentCycle < m_idleUntil)
-            return nullptr; // GOW-Port: nada cambió y ningún hilo en Delay despierta todavía
+            return nullptr; // nothing changed and no delayed thread wakes up yet
 
-        // GOW-Port: un solo recorrido. Despertar los Delay vencidos y elegir el listo de menor prioridad (y
-        // menor id) no dependen del orden; los que siguen en Delay dan el próximo despertar.
+        // A single pass: waking expired delays and picking the ready thread with the best priority (then lowest id)
+        // do not depend on order; threads still delayed give the next wake-up.
         IopThread *next = nullptr;
         uint64_t idleUntil = UINT64_MAX;
         for (auto &[id, thread] : m_threads)
@@ -768,7 +768,7 @@ namespace ps2x::iop::detail
 
     uint64_t IopKernel::nextWakeCycle(uint64_t fallback) const
     {
-        if (m_idleVersion == m_version) // GOW-Port: calculado por el último beginNextReady sin hilos listos
+        if (m_idleVersion == m_version) // computed by the last beginNextReady that found no ready thread
             return std::min(fallback, m_idleUntil);
         uint64_t nextWake = fallback;
         for (const auto &[id, thread] : m_threads)
@@ -781,7 +781,7 @@ namespace ps2x::iop::detail
 
     void IopKernel::endTimeslice(IopThread &thread, uint32_t returnSentinel)
     {
-        ++m_version; // GOW-Port: invalida la caché de beginNextReady
+        ++m_version; // invalidates the beginNextReady cache
         if (thread.cpu.pc == returnSentinel || thread.cpu.stopped)
             thread.state = IopThreadState::Dormant;
         else if (thread.state == IopThreadState::Running)
@@ -792,7 +792,7 @@ namespace ps2x::iop::detail
 
     void IopKernel::cleanupDeadThreads()
     {
-        ++m_version; // GOW-Port: invalida la caché de beginNextReady
+        ++m_version; // invalidates the beginNextReady cache
         for (auto thread = m_threads.begin(); thread != m_threads.end();)
         {
             if (thread->second.state != IopThreadState::Dead)
@@ -808,7 +808,7 @@ namespace ps2x::iop::detail
 
     void IopKernel::terminateThreadsInRange(uint32_t base, uint32_t size)
     {
-        ++m_version; // GOW-Port: invalida la caché de beginNextReady
+        ++m_version; // invalidates the beginNextReady cache
         for (auto &[id, thread] : m_threads)
         {
             const uint32_t pc = IopMemory::physicalAddress(thread.cpu.pc);

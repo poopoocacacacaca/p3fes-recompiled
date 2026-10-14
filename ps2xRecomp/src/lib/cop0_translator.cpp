@@ -44,7 +44,7 @@ namespace ps2recomp
             case COP0_REG_BADVADDR:
                 return fmt::format("SET_GPR_S32(ctx, {}, (int32_t)ctx->cop0_badvaddr);", rt);
             case COP0_REG_COUNT:
-                // GOW-Port: MFC0 Count actualiza el contador incluso con destino $zero.
+                // MFC0 Count updates the counter even when the destination is $zero.
                 if (rt == 0u)
                     return "(void)runtime->readCop0Count(ctx);";
                 return fmt::format("SET_GPR_S32(ctx, {}, (int32_t)runtime->readCop0Count(ctx));", rt);
@@ -97,7 +97,7 @@ namespace ps2recomp
             case COP0_REG_BADVADDR:
                 return "// MTC0 to BADVADDR register ignored (read-only)";
             case COP0_REG_COUNT:
-                // GOW-Port: una escritura cambia la base global, no solo este hilo.
+                // a write changes the global base, not only this thread.
                 return fmt::format("runtime->writeCop0Count(ctx, GPR_U32(ctx, {}));", rt);
             case COP0_REG_ENTRYHI:
                 return fmt::format("ctx->cop0_entryhi = GPR_U32(ctx, {}) & 0xC00000FF;", rt);

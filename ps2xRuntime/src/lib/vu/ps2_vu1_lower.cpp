@@ -8,10 +8,10 @@
 #include <cstring>
 #include <limits>
 
-// GOW-Port: la aritmética de VU no depende de /fp:fast. El runtime se compila con /fp:fast, que deja al
-// compilador fusionar a*b+c en FMA según dónde esté el código: el intérprete y el microcódigo compilado
-// (o dos versiones del intérprete) podían dar resultados distintos. Aquí cada operación se redondea por
-// separado, como en las FMAC de la PS2 (y en PCSX2).
+// VU arithmetic does not depend on /fp:fast. The runtime builds with /fp:fast, which lets the compiler fuse
+// a*b+c into FMA depending on where the code is: the interpreter and the compiled microcode (or two copies of
+// the interpreter) could give different results. Here each operation rounds separately, as in the PS2's FMACs
+// (and in PCSX2).
 #if defined(_MSC_VER)
 #pragma float_control(precise, on, push)
 #pragma fp_contract(off)
@@ -25,7 +25,7 @@ namespace
             0.999999344348907f,
             -0.333298563957214f,
             0.199465364217758f,
-            // GOW-Port: el coeficiente de t^7 es -0.139085..., como en PCSX2 (antes -0.130853..., una errata).
+            // the t^7 coefficient is -0.139085..., as in PCSX2 (it was -0.130853..., an erratum).
             -0.139085337519646f,
             0.096420042216778f,
             -0.055909886956215f,
@@ -185,7 +185,7 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
     }
     case 0x10: // FCEQ
     {
-        commitReadyFlags(); // GOW-Port: flags listos en este ciclo
+        commitReadyFlags(); // flags ready in this cycle
         uint32_t imm24 = instr & 0xFFFFFF;
         if (1 != 0)
             m_state.vi[1] = ((m_state.clip & 0xFFFFFF) == imm24) ? 1 : 0;
@@ -198,7 +198,7 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
     }
     case 0x12: // FCAND
     {
-        commitReadyFlags(); // GOW-Port: flags listos en este ciclo
+        commitReadyFlags(); // flags ready in this cycle
         uint32_t imm24 = instr & 0xFFFFFF;
         if (1 != 0)
             m_state.vi[1] = ((m_state.clip & imm24) != 0) ? 1 : 0;
@@ -206,7 +206,7 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
     }
     case 0x13: // FCOR
     {
-        commitReadyFlags(); // GOW-Port: flags listos en este ciclo
+        commitReadyFlags(); // flags ready in this cycle
         uint32_t imm24 = instr & 0xFFFFFF;
         if (1 != 0)
             m_state.vi[1] = ((m_state.clip | imm24) == 0xFFFFFF) ? 1 : 0;
@@ -214,7 +214,7 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
     }
     case 0x14: // FSEQ
     {
-        commitReadyFlags(); // GOW-Port: flags listos en este ciclo
+        commitReadyFlags(); // flags ready in this cycle
         const uint8_t it = VIT(instr);
         const uint16_t imm12 = static_cast<uint16_t>((((instr >> 21) & 0x1u) << 11) | (instr & 0x7FFu));
         if (it != 0)
@@ -229,7 +229,7 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
     }
     case 0x16: // FSAND
     {
-        commitReadyFlags(); // GOW-Port: flags listos en este ciclo
+        commitReadyFlags(); // flags ready in this cycle
         const uint8_t it = VIT(instr);
         const uint16_t imm12 = static_cast<uint16_t>((((instr >> 21) & 0x1u) << 11) | (instr & 0x7FFu));
         if (it != 0)
@@ -238,7 +238,7 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
     }
     case 0x17: // FSOR
     {
-        commitReadyFlags(); // GOW-Port: flags listos en este ciclo
+        commitReadyFlags(); // flags ready in this cycle
         const uint8_t it = VIT(instr);
         const uint16_t imm12 = static_cast<uint16_t>((((instr >> 21) & 0x1u) << 11) | (instr & 0x7FFu));
         if (it != 0)
@@ -247,7 +247,7 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
     }
     case 0x18: // FMEQ
     {
-        commitReadyFlags(); // GOW-Port: flags listos en este ciclo
+        commitReadyFlags(); // flags ready in this cycle
         uint8_t it = VIT(instr);
         uint8_t is = VIS(instr);
         if (it != 0)
@@ -256,7 +256,7 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
     }
     case 0x1A: // FMAND
     {
-        commitReadyFlags(); // GOW-Port: flags listos en este ciclo
+        commitReadyFlags(); // flags ready in this cycle
         uint8_t it = VIT(instr);
         uint8_t is = VIS(instr);
         if (it != 0)
@@ -265,7 +265,7 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
     }
     case 0x1B: // FMOR
     {
-        commitReadyFlags(); // GOW-Port: flags listos en este ciclo
+        commitReadyFlags(); // flags ready in this cycle
         uint8_t it = VIT(instr);
         uint8_t is = VIS(instr);
         if (it != 0)
@@ -274,7 +274,7 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
     }
     case 0x1C: // FCGET
     {
-        commitReadyFlags(); // GOW-Port: flags listos en este ciclo
+        commitReadyFlags(); // flags ready in this cycle
         const uint8_t it = VIT(instr);
         if (it != 0)
             m_state.vi[it] = static_cast<int32_t>(m_state.clip & 0x0FFFu);
@@ -304,8 +304,7 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
     case 0x24: // JR
     {
         uint8_t is = VIS(instr);
-        // GOW-Port: JR/JALR leen el VI actual; el valor retrasado se usa
-        // solo en las comparaciones de ramas condicionales.
+        // JR/JALR read the current VI; the delayed value is only used by conditional branch comparisons.
         uint32_t target = ((uint32_t)(uint16_t)m_state.vi[is] * 8u) & pcMask;
         m_state.branchPending = true;
         m_state.branchTarget = target;
@@ -316,8 +315,7 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
     {
         uint8_t it = VIT(instr);
         uint8_t is = VIS(instr);
-        // GOW-Port: JR/JALR leen el VI actual; el valor retrasado se usa
-        // solo en las comparaciones de ramas condicionales.
+        // JR/JALR read the current VI; the delayed value is only used by conditional branch comparisons.
         uint32_t target = ((uint32_t)(uint16_t)m_state.vi[is] * 8u) & pcMask;
         if (it != 0)
             m_state.vi[it] = (int32_t)((m_state.pc + 16) / 8);
@@ -747,8 +745,7 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
                 queueP(sum, 12u);
                 return;
             }
-            // GOW-Port: códigos EFU del LowerOP de PCSX2
-            // 32ac6e23e4aaf8c8c5e74a6c1ed750ee7672120e; 0x77 es reservado.
+            // EFU codes from PCSX2's LowerOP 32ac6e23e4aaf8c8c5e74a6c1ed750ee7672120e; 0x77 is reserved.
             case 0x79: // ERSQRT
             {
                 const uint32_t component = (instr >> 21) & 3u;

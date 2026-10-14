@@ -1,5 +1,5 @@
-// GOW-Port: adaptado de Taylor N. Albarnaz / LightVelox (GPL-3.0).
-// Origen: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
+// Adapted from Taylor N. Albarnaz / LightVelox (GPL-3.0).
+// Source: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
 #include "gs_gpu_shaders.h"
 
 namespace GSGpuShaders
@@ -340,7 +340,7 @@ uint applyTexa(uint s, uint psm, uint texel)
     uint ta1 = (texa >> 16u) & 0xFFu;
     bool rgbZero = (texel & 0x00FFFFFFu) == 0u;
     uint a = texel >> 24u;
-    // GOW-Port: TEXA comparte semántica en las texturas color y sus alias depth.
+    // TEXA has the same semantics for color textures and their depth aliases.
     if (psm == 1u || psm == 0x31u)
         a = (aem && rgbZero) ? 0u : ta0;
     else if (psm == 2u || psm == 10u || psm == 0x32u || psm == 0x3Au)
@@ -435,7 +435,7 @@ uint samplePoint(uint s, int u, int v)
 
 uint lerpChannel(uint c00, uint c10, uint c01, uint c11, float fx, float fy)
 {
-    // GOW-Port: mismas fracciones de 4 bits y truncados por etapa que el backend CPU.
+    // same 4-bit fractions and per-stage truncation as the CPU backend.
     uint wx = min(uint(fx * 16.0), 15u);
     uint wy = min(uint(fy * 16.0), 15u);
     uint top = ((16u - wx) * c00 + wx * c10) >> 4u;
@@ -463,8 +463,8 @@ uint sampleTexture(uint s, float ss, float tt, float q, uint u, uint v)
     }
     else
     {
-        // GOW-Port: refinar el reciproco del driver antes de escalar S/T. Con Q=1.5
-        // una aproximacion inferior elegia el texel anterior incluso sin interpolacion.
+        // Refine the driver's reciprocal before scaling S/T. With Q=1.5 a low approximation picked the previous texel
+        // even without interpolation.
         float divisor = fabsQ(q);
         precise float invQ = 1.0 / divisor;
         if (invQ != 0.0)
@@ -475,7 +475,7 @@ uint sampleTexture(uint s, float ss, float tt, float q, uint u, uint v)
         texUf = ss * invQ * texW;
         texVf = tt * invQ * texH;
     }
-    // GOW-Port: conversion 16.16 antes del medio texel, tambien para bilinear STQ.
+    // 16.16 conversion before the half texel, also for bilinear STQ.
     precise float fixedU = trunc(texUf * 65536.0);
     precise float fixedV = trunc(texVf * 65536.0);
     if ((flags & F_LINEAR) == 0u)
@@ -549,7 +549,7 @@ void writePixel(uint s, int x, int y, uint z, uvec4 c, uint fog)
     if ((flags & F_FGE) != 0u)
     {
         uint fogColor = st(s, S_FOGCOL);
-        // GOW-Port: pesos suman 256 y se trunca una sola vez, igual que la referencia GS.
+        // weights add up to 256 and truncate once, as the GS reference does.
         uint inverseFog = 256u - fog;
         r = int((fog * uint(r) + inverseFog * (fogColor & 0xFFu)) >> 8u) & 0xFF;
         g = int((fog * uint(g) + inverseFog * ((fogColor >> 8u) & 0xFFu)) >> 8u) & 0xFF;
@@ -572,7 +572,7 @@ void writePixel(uint s, int x, int y, uint z, uvec4 c, uint fog)
     if (!writesFramebuffer && !writeDepth)
         return;
 
-    // GOW-Port: ZTE=0 dibuja sin prueba Z ni escritura Z, igual que la referencia GS.
+    // ZTE=0 draws with no Z test and no Z write, as the GS reference does.
     bool ztestEnabled = (test & 0x10000u) != 0u;
     uint ztestMethod = ztestEnabled ? ((test >> 17u) & 3u) : 1u;
     bool abe = (flags & F_ABE) != 0u;
@@ -744,10 +744,10 @@ void drawTriangle(uint p, uint s, int x, int y)
         bool zero = hi == 0 && lo == 0u;
         if (!(positive || (zero && bias)))
             return;
-        // GOW-Port: el edge del dominio GS conserva sus bits antes de ponderar.
+        // the GS-domain edge keeps its bits before weighting.
         e[i] = double(hi) * 4294967296.0 + double(lo);
     }
-    // GOW-Port: mismo redondeo final a float que CPU, sin recíproco float intermedio.
+    // same final rounding to float as the CPU, with no intermediate float reciprocal.
     precise double weighted1 = e[1] * invArea;
     precise double weighted2 = e[2] * invArea;
     float w1 = float(weighted1);
@@ -765,8 +765,8 @@ void drawTriangle(uint p, uint s, int x, int y)
     uvec4 color;
     if ((flags & F_IIP) != 0u)
     {
-        // GOW-Port: diferencias firmadas antes de ponderar; un alpha constante de 128
-        // no puede caer a 127 por el redondeo de la suma de pesos y fallar el alpha-test.
+        // signed differences before weighting; a constant alpha of 128 cannot drop to 127 through the rounding of
+        // the weight sum and fail the alpha test.
         precise vec4 mixed = vec4(c0) + (vec4(c1) - vec4(c0)) * w1 + (vec4(c2) - vec4(c0)) * w2;
         color = uvec4(clampU8(int(mixed.r)), clampU8(int(mixed.g)), clampU8(int(mixed.b)), clampU8(int(mixed.a)));
     }
@@ -781,7 +781,7 @@ void drawTriangle(uint p, uint s, int x, int y)
             uint uv0 = pw(p, 29u);
             uint uv1 = pw(p, 30u);
             uint uv2 = pw(p, 31u);
-            // GOW-Port: diferencias float firmadas, constantes exactas y UV descendentes.
+            // signed float differences, exact constants and descending UVs.
             float u0 = float(uv0 & 0xFFFFu), v0 = float(uv0 >> 16u);
             precise float fu = u0 + (float(uv1 & 0xFFFFu) - u0) * w1 + (float(uv2 & 0xFFFFu) - u0) * w2;
             precise float fv = v0 + (float(uv1 >> 16u) - v0) * w1 + (float(uv2 >> 16u) - v0) * w2;
@@ -789,7 +789,7 @@ void drawTriangle(uint p, uint s, int x, int y)
         }
         else
         {
-            // GOW-Port: interpolar S/T/Q homogeneos por diferencias, antes de dividir por Q.
+            // interpolate homogeneous S/T/Q by differences, before dividing by Q.
             float s0 = pf(p, 20u), t0 = pf(p, 21u), q0 = pf(p, 22u);
             precise float is = s0 + (pf(p, 23u) - s0) * w1 + (pf(p, 26u) - s0) * w2;
             precise float it = t0 + (pf(p, 24u) - t0) * w1 + (pf(p, 27u) - t0) * w2;
@@ -799,7 +799,7 @@ void drawTriangle(uint p, uint s, int x, int y)
         color = combineTexture(s, color, texel);
     }
     uint fogs = pw(p, 32u);
-    // GOW-Port: mantener F constante; las restas son float, no uint con underflow.
+    // keep F constant; the subtractions are float, not underflowing uint.
     float fog0 = float(fogs & 0xFFu);
     precise float ffog = fog0 + (float((fogs >> 8u) & 0xFFu) - fog0) * w1 + (float((fogs >> 16u) & 0xFFu) - fog0) * w2;
     uint fog = clampU8(int(ffog));
@@ -1133,7 +1133,7 @@ uint readCircuit(uint c[12], int rx, int ry)
 {
     uint bx = (uint((rx - int(c[6])) / int(c[10])) + c[4]) & 0x7FFu;
     uint by = (uint((ry - int(c[7])) / int(c[11])) + c[5]) & 0x7FFu;
-    // GOW-Port: la base ya llega en bloques de 256 B, también para preferredSource.
+    // the base already arrives in 256-byte blocks, also for preferredSource.
     return displayToRgba(c[3], readPixel(c[3], c[1], c[2], bx, by));
 }
 
@@ -1155,7 +1155,7 @@ void main()
     int y0 = int(uOut.z >> 16u);
     int hstep = int(uOut.w & 0xFFFFu);
     int vstep = int(uOut.w >> 16u);
-    // GOW-Port: SMODE2 en modo de campos duplica las filas del campo seleccionado.
+    // SMODE2 in field mode doubles the rows of the selected field.
     uint sourceY = oy;
     if ((uMode.w & 1u) != 0u)
         sourceY = min(((oy >> 1u) << 1u) + ((uMode.w >> 1u) & 1u), height - 1u);
@@ -1185,7 +1185,7 @@ void main()
         if (in1)
         {
             uint color = readCircuit(c1, rx, ry);
-            // GOW-Port: con un único circuito no mezclar contra el fondo por su alfa.
+            // with a single circuit, do not blend against the background by its alpha.
             if (c2[0] == 0u)
             {
                 r = color & 0xFFu;
@@ -1290,8 +1290,8 @@ void main()
     uvec4 c;
     uint fog;
     bool shaded = coversPixel(vPrim, x, y) && shadePrim(vPrim, x, y, s, z, c, fog);
-    // GOW-Port: ARB permite discard antes del interlock; conservar begin/end fuera de ramas.
-#ifndef GOW_HW_KEEP_UNCOVERED
+    // ARB allows discard before the interlock; keep begin/end outside branches.
+#ifndef PS2X_HW_KEEP_UNCOVERED
     if (!shaded)
         discard;
 #endif

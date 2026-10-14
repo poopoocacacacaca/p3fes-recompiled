@@ -55,7 +55,7 @@ namespace ps2x::iop::detail
     bool IopCpuCore::executeInstruction(IopCpuState &cpu)
     {
         const uint32_t pc = cpu.pc;
-        const uint32_t instruction = m_memory.fetch32(pc); // GOW-Port: lectura en linea
+        const uint32_t instruction = m_memory.fetch32(pc); // inline read
         const bool wasDelaySlot = cpu.branchPending;
         const uint32_t priorBranchTarget = cpu.branchTarget;
 
@@ -356,8 +356,8 @@ namespace ps2x::iop::detail
         {
             const uint32_t address = cpu.gpr[rs] + static_cast<uint32_t>(simm);
             const uint32_t memory = m_memory.load32(address & ~3u);
-            // GOW-Port: LWL/LWR seguidas sobre el mismo registro combinan con el valor que aún está en el
-            // hueco de retardo de carga (como el R3000). mc2_d copia así las especificaciones de la tarjeta.
+            // Back-to-back LWL/LWR on the same register merge with the value still in the load delay slot
+            // (as on the R3000). mc2_d copies the card specs this way.
             const uint32_t old = cpu.pendingLoad && cpu.pendingLoadReg == rt ? cpu.pendingLoadValue : cpu.gpr[rt];
             static constexpr uint32_t masks[4] = {0x00FFFFFFu, 0x0000FFFFu, 0x000000FFu, 0x00000000u};
             static constexpr uint32_t shifts[4] = {24u, 16u, 8u, 0u};

@@ -1,6 +1,6 @@
-// GOW-Port: un paso del intérprete de VU1 (un par de instrucciones) y su contabilidad de latencias.
-// Lo usan run() y los microprogramas compilados (tools/vu1/generar_vu1.cpp), que lo llaman con cada par
-// ya decodificado como constante para que el compilador simplifique la contabilidad.
+// One VU1 interpreter step (an instruction pair) and its latency accounting. Used by run() and by the compiled
+// microprograms (tools/vu1/generar_vu1.cpp), which call it with each pair already decoded as a constant so the
+// compiler can simplify the accounting.
 #ifndef PS2_VU1_STEP_INL
 #define PS2_VU1_STEP_INL
 
@@ -12,10 +12,10 @@
 #include <immintrin.h>
 #endif
 
-// GOW-Port: la aritmética de VU no depende de /fp:fast. El runtime se compila con /fp:fast, que deja al
-// compilador fusionar a*b+c en FMA según dónde esté el código: el intérprete y el microcódigo compilado
-// (o dos versiones del intérprete) podían dar resultados distintos. Aquí cada operación se redondea por
-// separado, como en las FMAC de la PS2 (y en PCSX2).
+// VU arithmetic does not depend on /fp:fast. The runtime builds with /fp:fast, which lets the compiler fuse
+// a*b+c into FMA depending on where the code is: the interpreter and the compiled microcode (or two copies of
+// the interpreter) could give different results. Here each operation rounds separately, as in the PS2's FMACs
+// (and in PCSX2).
 #if defined(_MSC_VER)
 #pragma float_control(precise, on, push)
 #pragma fp_contract(off)
@@ -32,10 +32,10 @@ static constexpr uint8_t vu1StepLane(uint32_t component)
     return static_cast<uint8_t>(1u << (3u - component));
 }
 
-// GOW-Port: escrituras de registros VF/ACC con un único store de 16 bytes. Si un registro se escribe con
-// varios stores de 4 bytes y el par siguiente lo lee con un load de 16 bytes (lo normal en las FMAC con SSE),
-// el reenvío store->load falla y el load espera a que los stores lleguen a la caché. Los carriles se mezclan
-// bit a bit (sin operaciones de coma flotante): el resultado es idéntico.
+// VF/ACC register writes with a single 16-byte store. If a register is written with several 4-byte stores and
+// the next pair reads it with a 16-byte load (the norm for SSE FMACs), store->load forwarding fails and the load
+// waits for the stores to reach the cache. Lanes are blended bitwise (no floating-point operations): the result is
+// identical.
 VU1_STEP_INLINE void vu1StoreVf0(float *vf0)
 {
 #if defined(_MSC_VER) || defined(__SSE4_1__)
@@ -48,7 +48,7 @@ VU1_STEP_INLINE void vu1StoreVf0(float *vf0)
 #endif
 }
 
-// dest: máscara de VU (bit 3 = x ... bit 0 = w).
+// dest: VU mask (bit 3 = x ... bit 0 = w).
 VU1_STEP_INLINE void vu1StoreLanes(float *dst, const float *src, uint32_t dest)
 {
 #if defined(_MSC_VER) || defined(__SSE4_1__)
@@ -86,7 +86,7 @@ VU1_STEP_INLINE uint64_t VU1Interpreter::calculatePairReadyCycle(const DecodedIn
             continue;
         for (uint32_t index = 0; index < usage->vfReadCount; ++index)
         {
-            // GOW-Port: recorrer solo los bits activos (bit 3 = x ... bit 0 = w).
+            // walk only the set bits (bit 3 = x ... bit 0 = w).
             const VfAccess &access = usage->vfRead[index];
             const auto &vfReady = m_vfReady[access.reg];
             for (uint32_t lanes = access.lanes & 0xFu; lanes != 0u; lanes &= lanes - 1u)
@@ -157,7 +157,7 @@ VU1_STEP_INLINE void VU1Interpreter::markPairWrites(const DecodedInstructionPair
 VU1_STEP_INLINE bool VU1Interpreter::stepPair(const DecodedInstructionPair &decoded, StepContext &context)
 {
     if (m_xgkick.active)
-        xgkickAdvanceTo(m_cycle); // GOW-Port: PATH1 al día tras código compilado (por eventos)
+        xgkickAdvanceTo(m_cycle); // PATH1 up to date after compiled code (by events)
     uint64_t readyCycle = calculatePairReadyCycle(decoded);
     while (readyCycle > m_cycle)
     {
@@ -289,8 +289,8 @@ VU1_STEP_INLINE bool VU1Interpreter::stepPair(const DecodedInstructionPair &deco
     if (writtenVi != 0u && decoded.lowerUsage.delaysNextBranchRead)
         recordViWriteForBranch(writtenVi, oldVi);
 
-    // GOW-Port: VF0 con un solo store de 16 bytes: la lectura de 16 bytes de VF0 en el par siguiente
-    // (vf00w = 1.0 es muy frecuente) no puede reenviarse desde cuatro stores de 4 bytes.
+    // VF0 with a single 16-byte store: the 16-byte read of VF0 in the next pair (vf00w = 1.0 is very common) cannot be
+    // forwarded from four 4-byte stores.
     vu1StoreVf0(m_state.vf[0]);
     m_state.vi[0] = 0;
 

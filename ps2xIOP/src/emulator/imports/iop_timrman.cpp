@@ -177,7 +177,7 @@ namespace ps2x::iop::detail
         const uint32_t a2 = cpu.gpr[6];
         const uint32_t a3 = cpu.gpr[7];
         const auto setV0 = [&](uint32_t value) { cpu.gpr[2] = value; };
-        m_earliestValid = false; // GOW-Port: las importaciones pueden programar o parar temporizadores
+        m_earliestValid = false; // imports can start or stop timers
 
         switch (ordinal)
         {
@@ -436,7 +436,7 @@ namespace ps2x::iop::detail
     {
         if (m_servicing)
             return;
-        // GOW-Port: nada vence antes del primer evento programado (el bucle de abajo no haría nada).
+        // nothing expires before the first scheduled event (the loop below would do nothing).
         if (currentCycle < earliestEventCycle())
             return;
         m_earliestValid = false;
@@ -445,7 +445,7 @@ namespace ps2x::iop::detail
         {
             bool &flag;
             bool &earliestValid;
-            // GOW-Port: las retrollamadas pueden consultar el próximo evento a mitad del servicio.
+            // callbacks can query the next event while being serviced.
             ~ServiceGuard() { flag = false; earliestValid = false; }
         } guard{m_servicing, m_earliestValid};
 

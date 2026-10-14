@@ -512,7 +512,7 @@ namespace ps2_stubs
             uint64_t presentationEndTickQ32 = std::numeric_limits<uint64_t>::max();
             int64_t firstPresentedPts90k = -1;
             uint64_t ptsPresentationBaseTickQ32 = 0u;
-            // GOW-Port: bytes aceptados por sceMpegDemuxPssRing, para saber si sceMpegCbNodata aporto datos.
+            // bytes accepted by sceMpegDemuxPssRing, to know whether sceMpegCbNodata supplied data.
             uint64_t demuxedBytes = 0u;
         };
 
@@ -563,7 +563,7 @@ namespace ps2_stubs
         constexpr uint8_t kMpegPrivateStream1 = 0xBDu;
         constexpr size_t kStartCodeNotFound = std::numeric_limits<size_t>::max();
         constexpr uint32_t kMpegCallbackDataSize = 0x20u;
-        // GOW-Port: sceMpegCbType de libmpeg (sceMpegCbError = 0, sceMpegCbNodata = 1, ...).
+        // libmpeg's sceMpegCbType (sceMpegCbError = 0, sceMpegCbNodata = 1, ...).
         constexpr uint32_t kMpegCbNodata = 1u;
 
         uint64_t mpegPictureIntervalQ32(uint8_t frameRateCode, uint8_t frameRateExtensionN = 0u, uint8_t frameRateExtensionD = 0u)
@@ -1772,7 +1772,7 @@ namespace ps2_stubs
         resetMpegStubStateUnlocked();
     }
 
-    // GOW-Port: estado del decodificador para las pruebas (¿falta la cabecera de secuencia?).
+    // decoder state for tests (is the sequence header missing?).
     bool mpegWaitingForSequenceHeaderForTesting(uint32_t mpegAddr)
     {
         std::lock_guard<std::mutex> lock(g_mpeg_stub_mutex);
@@ -1937,7 +1937,7 @@ namespace ps2_stubs
         g_mpeg_stub_state.callbacksByMpeg[mpegAddr].push_back(
             MpegRegisteredCallback{callbackType, 0u, callbackFunc, callbackData, handle, false});
 
-        // GOW-Port: registro acotado de los callbacks que registra el juego (tipo 1 = sceMpegCbNodata).
+        // bounded log of the callbacks the game registers (type 1 = sceMpegCbNodata).
         static uint32_t s_addCallbackTrace = 0u;
         if (s_addCallbackTrace < 16u)
         {
@@ -2020,10 +2020,9 @@ namespace ps2_stubs
 
         {
             std::lock_guard<std::mutex> lock(g_mpeg_stub_mutex);
-            // GOW-Port: God of War demultiplexa el primer bloque del PSS (con la cabecera de secuencia)
-            // antes de sceMpegCreate. Reiniciar aquí descartaba esa cabecera; como el vídeo no la repite,
-            // el decodificador esperaba para siempre y el juego se quedaba en sceMpegGetPicture.
-            // Se conserva la entrada ya demultiplexada del flujo en curso.
+            // Some games (God of War) demux the first PSS block (with the sequence header) before sceMpegCreate.
+            // Resetting here dropped that header; since the video does not repeat it, the decoder waited forever and
+            // the game stalled in sceMpegGetPicture. The input already demuxed from the current stream is kept.
             MpegPlaybackState &existing = getPlaybackState(param_1);
             const bool keepPendingInput = existing.sawInput && !existing.streamEnded && !existing.decoderFailed &&
                                           existing.picturesServed == 0u &&
@@ -2310,7 +2309,7 @@ namespace ps2_stubs
         setReturnU32(ctx, getPlaybackState(mpegAddr).decodeMode);
     }
 
-    // GOW-Port: sceMpegCbNodata registrado para mpegAddr (requiere g_mpeg_stub_mutex).
+    // sceMpegCbNodata registered for mpegAddr (requires g_mpeg_stub_mutex).
     static bool findNodataCallbackUnlocked(uint32_t mpegAddr, PS2Runtime *runtime, MpegRegisteredCallback &out)
     {
         auto it = g_mpeg_stub_state.callbacksByMpeg.find(mpegAddr);
@@ -2330,9 +2329,9 @@ namespace ps2_stubs
         return false;
     }
 
-    // GOW-Port: llama a sceMpegCbNodata(mpeg, &cbData{type = Nodata}, data) en el hilo actual y despues vuelve a
-    // evaluar sceMpegGetPicture. Si el callback no aporto datos, espera al siguiente VSync antes de reintentar
-    // para no acaparar la CPU que necesita el hilo que lee del disco.
+    // Calls sceMpegCbNodata(mpeg, &cbData{type = Nodata}, data) on the current thread and then evaluates
+    // sceMpegGetPicture again. If the callback supplied no data, waits for the next VSync before retrying so it
+    // does not hog the CPU the disc-reading thread needs.
     [[noreturn]] static void dispatchNodataCallback(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime,
                                                     uint32_t mpegAddr, const MpegRegisteredCallback &callback,
                                                     uint64_t demuxedBefore)
@@ -2407,8 +2406,8 @@ namespace ps2_stubs
                 !playback.streamEnded &&
                 !playback.decoderFailed)
             {
-                // GOW-Port: como libmpeg, sin datos se llama primero a sceMpegCbNodata en el hilo que pide la
-                // imagen; ese callback suele leer del anillo y llamar a sceMpegDemuxPssRing.
+                // as libmpeg does, with no data sceMpegCbNodata is called first on the thread asking for the picture; that
+                // callback usually reads from the ring and calls sceMpegDemuxPssRing.
                 MpegRegisteredCallback nodata{};
                 if (findNodataCallbackUnlocked(mpegAddr, runtime, nodata))
                 {

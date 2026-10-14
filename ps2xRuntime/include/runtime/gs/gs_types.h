@@ -38,7 +38,7 @@ enum GSGifFormat : uint8_t
     GIF_FMT_PACKED = 0,
     GIF_FMT_REGLIST = 1,
     GIF_FMT_IMAGE = 2,
-    // GOW-Port: compatibilidad IMAGE2, como GSState::Transfer de PCSX2 (32ac6e2).
+    // IMAGE2 compatibility, as PCSX2's GSState::Transfer (32ac6e2).
     GIF_FMT_IMAGE2 = 3,
     GIF_FMT_DISABLED = GIF_FMT_IMAGE2, // conservar el nombre publico anterior
 };
@@ -290,7 +290,7 @@ struct GSPresentationRequest
     GSFrameReg preferredSource{};
     uint32_t preferredDestFbp = 0;
     bool hasPreferredSource = false;
-    // GOW-Port: solo las capturas explicitas descargan pixeles en modo compartido.
+    // in shared mode only explicit captures download pixels.
     bool forceReadback = false;
 };
 

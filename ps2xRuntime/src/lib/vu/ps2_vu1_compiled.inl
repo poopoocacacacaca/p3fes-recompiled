@@ -1,8 +1,7 @@
-// GOW-Port: paso de VU1 especializado para microcódigo compilado (tools/vu1/generar_vu1.cpp).
-// stepPairT<T> hace exactamente lo mismo que stepPair con el par T::value, pero como el par es una
-// constante, cada decisión que depende de la decodificación se resuelve al compilar ("if constexpr") y
-// solo queda el trabajo de ese par. Solo se usa con escrituras directas de registros (m_directRegisterWrites).
-// Las operaciones FMAC frecuentes se especializan (upperT); el resto llama al intérprete.
+// VU1 step specialized for compiled microcode (tools/vu1/generar_vu1.cpp). stepPairT<T> does exactly the same as
+// stepPair with the pair T::value, but since the pair is a constant every decode-dependent decision resolves at
+// compile time ("if constexpr") and only that pair's work remains. Only used with direct register writes
+// (m_directRegisterWrites). Frequent FMAC operations are specialized (upperT); the rest call the interpreter.
 #ifndef PS2_VU1_COMPILED_INL
 #define PS2_VU1_COMPILED_INL
 
@@ -17,10 +16,10 @@
 #define VU1C_SIMD 0
 #endif
 
-// GOW-Port: la aritmética de VU no depende de /fp:fast. El runtime se compila con /fp:fast, que deja al
-// compilador fusionar a*b+c en FMA según dónde esté el código: el intérprete y el microcódigo compilado
-// (o dos versiones del intérprete) podían dar resultados distintos. Aquí cada operación se redondea por
-// separado, como en las FMAC de la PS2 (y en PCSX2).
+// VU arithmetic does not depend on /fp:fast. The runtime builds with /fp:fast, which lets the compiler fuse
+// a*b+c into FMA depending on where the code is: the interpreter and the compiled microcode (or two copies of
+// the interpreter) could give different results. Here each operation rounds separately, as in the PS2's FMACs
+// (and in PCSX2).
 #if defined(_MSC_VER)
 #pragma float_control(precise, on, push)
 #pragma fp_contract(off)
@@ -137,9 +136,9 @@ namespace vu1c
         }
     }
 
-    // applyDest con la máscara constante.
-    // GOW-Port: un único store de 16 bytes (mezcla de carriles). Varios stores de 4 bytes seguidos de la
-    // lectura de 16 bytes del registro en el par siguiente impedían el reenvío store->load.
+    // applyDest with the constant mask.
+    // A single 16-byte store (lane blend). Several 4-byte stores followed by the 16-byte read of the register in the
+    // next pair prevented store->load forwarding.
     template <uint32_t Dest>
     VU1_STEP_INLINE void applyDestT(float *dst, const float *src)
     {
@@ -163,17 +162,17 @@ namespace vu1c
         }
 #endif
     }
-    // GOW-Port: store de VU1 con DEST constante, escrito en el acto. queueStore lo encolaba con un ciclo de
-    // latencia, pero el mismo paso avanza ese ciclo y commitReadyPipelines lo escribe antes de que nada más
-    // lea la memoria (el siguiente par, PATH1 o el VIF): el resultado es el mismo.
+    // VU1 store with a constant DEST, written immediately. queueStore queued it with one cycle of latency, but the
+    // same step advances that cycle and commitReadyPipelines writes it before anything else reads memory (the next
+    // pair, PATH1 or the VIF): the result is the same.
     template <uint32_t Dest>
     VU1_STEP_INLINE void storeT(uint8_t *target, const uint32_t words[4])
     {
         if constexpr (Dest == 0xFu)
             std::memcpy(target, words, 16u);
 #if defined(_MSC_VER) || defined(__SSE4_1__)
-        // GOW-Port: DEST parcial con una mezcla en registros. Copiar a la pila, cambiar carriles de 4 bytes y
-        // volver a leer 16 bytes impedía el reenvío store->load (unos 15 ciclos por SQ).
+        // Partial DEST with a blend in registers. Copying to the stack, changing 4-byte lanes and reading 16 bytes back
+        // prevented store->load forwarding (about 15 cycles per SQ).
         else if constexpr (Dest != 0u)
         {
             constexpr int lanes = ((Dest & 8u) ? 1 : 0) | ((Dest & 4u) ? 2 : 0) | ((Dest & 2u) ? 4 : 0) | ((Dest & 1u) ? 8 : 0);
@@ -194,8 +193,8 @@ namespace vu1c
         }
 #endif
     }
-    // Especiales de la unidad superior sin flags MAC: ITOF0..15 (0x10-0x13), FTOI0..15 (0x14-0x17), ABS
-    // (0x1D) y CLIP (0x1F). Devuelve la especial o 0 si es otra instrucción.
+    // Upper-unit specials without MAC flags: ITOF0..15 (0x10-0x13), FTOI0..15 (0x14-0x17), ABS (0x1D) and CLIP
+    // (0x1F). Returns the special, or 0 for any other instruction.
     constexpr uint32_t simpleSpecial(uint32_t upper)
     {
         if ((upper & 0x3Fu) < 0x3Cu)
@@ -214,7 +213,7 @@ namespace vu1c
         return static_cast<int32_t>(scaled);
     }
 #if VU1C_SIMD
-    // normalizeOperand en los cuatro carriles: exponente 0 -> cero con signo; exponente 255 -> máximo con signo.
+    // normalizeOperand on all four lanes: exponent 0 -> signed zero; exponent 255 -> signed maximum.
     VU1_STEP_INLINE __m128 normalize4(__m128 v)
     {
         const __m128i bits = _mm_castps_si128(v);
@@ -229,23 +228,23 @@ namespace vu1c
     {
         return _mm_and_si128(_mm_srli_epi32(_mm_castps_si128(v), 23), _mm_set1_epi32(0xFF));
     }
-    // Carriles activos de una máscara DEST (x = carril 0) como bits de movemask / blend.
+    // Active lanes of a DEST mask (x = lane 0) as movemask / blend bits.
     constexpr int laneBits(uint32_t dest)
     {
         return ((dest & 8u) ? 1 : 0) | ((dest & 4u) ? 2 : 0) | ((dest & 2u) ? 4 : 0) | ((dest & 1u) ? 8 : 0);
     }
 #endif
-    // Bits de MAC de una máscara de carriles en orden de componente (bit 0 = x), como laneForComponent: x = 8.
-    // VU1_STEP_INLINE: MSVC la dejaba como llamada en los bloques compilados.
+    // MAC bits of a lane mask in component order (bit 0 = x), like laneForComponent: x = 8.
+    // VU1_STEP_INLINE: MSVC left it as a call in the compiled blocks.
     VU1_STEP_INLINE constexpr uint32_t reverse4(uint32_t m)
     {
         return ((m & 1u) << 3) | ((m & 2u) << 1) | ((m & 4u) >> 1) | ((m & 8u) >> 3);
     }
     constexpr uint32_t crossLeft(uint32_t c) { return c == 0 ? 1u : c == 1 ? 2u : c == 2 ? 0u : 3u; }
     constexpr uint32_t crossRight(uint32_t c) { return c == 0 ? 2u : c == 1 ? 0u : c == 2 ? 1u : 3u; }
-    // GOW-Port: MAC (bits 0-3 Z, 4-7 S en orden de componente) y estado (Z = bit 0, S = bit 1) de una FMAC a
-    // partir de las máscaras de carriles de movemask (bit 0 = x): índice z | (s << 4), valor mac | (estado << 8).
-    // Una consulta en lugar de invertir los bits de cada máscara en cada FMAC.
+    // MAC (bits 0-3 Z, 4-7 S in component order) and status (Z = bit 0, S = bit 1) of an FMAC from the movemask lane
+    // masks (bit 0 = x): index z | (s << 4), value mac | (status << 8). One lookup instead of reversing the bits of
+    // each mask in every FMAC.
     struct MacStatusTable
     {
         uint16_t v[256];
@@ -262,8 +261,8 @@ namespace vu1c
     }
     inline constexpr MacStatusTable kMacStatus = makeMacStatusTable();
 
-    // GOW-Port: instrucciones inferiores que lowerT trata en línea: la misma lista que su cadena de if constexpr
-    // (si se añade un caso allí, hay que añadirlo aquí). Las demás llaman a execLower.
+    // Lower instructions lowerT handles inline: the same list as its if constexpr chain (a case added there must be
+    // added here). The rest call execLower.
     constexpr bool lowerInline(uint32_t instr)
     {
         const uint32_t opHi = (instr >> 25) & 0x7Fu;
@@ -288,7 +287,7 @@ namespace vu1c
         return funct >= 0x3Cu && (funct2 == 0x30u || funct2 == 0x31u || funct2 == 0x34u || funct2 == 0x35u ||
                                   funct2 == 0x3Bu || funct2 == 0x38u || funct2 == 0x3Cu || funct2 == 0x3Du);
     }
-    // Inferiores en línea que escriben VF[ft]: LQ, MOVE, MR32, LQI y MFIR. ¿Lo hacen en VF0?
+    // Inline lower instructions that write VF[ft]: LQ, MOVE, MR32, LQI and MFIR. Do they write VF0?
     constexpr bool lowerInlineWritesVf0(uint32_t instr)
     {
         const uint32_t opHi = (instr >> 25) & 0x7Fu;
@@ -300,7 +299,7 @@ namespace vu1c
             return true;
         return opHi == 0x40u && funct >= 0x3Cu && (funct2 == 0x30u || funct2 == 0x31u || funct2 == 0x34u || funct2 == 0x3Du);
     }
-    // ¿Puede la instrucción superior escribir VF0? (FMAC con fd = 0, ITOF/FTOI/ABS con ft = 0 o execUpper.)
+    // Can the upper instruction write VF0? (FMAC with fd = 0, ITOF/FTOI/ABS with ft = 0, or execUpper.)
     constexpr bool upperMayWriteVf0(uint32_t upper)
     {
         const UpperInfo info = classify(upper);
@@ -312,8 +311,8 @@ namespace vu1c
             return true;
         return !info.toAcc && ((upper >> 6) & 0x1Fu) == 0u;
     }
-    // El generador indica con T::clearBranchBackup = false que el par anterior del bloque no guardó un VI para
-    // un salto (m_viBranchBackupValid ya es falso).
+    // The generator signals with T::clearBranchBackup = false that the previous pair in the block did not save a VI
+    // for a branch (m_viBranchBackupValid is already false).
     template <class T>
     constexpr bool clearBranchBackup()
     {
@@ -324,8 +323,8 @@ namespace vu1c
     }
 }
 
-// Una componente de una operación FMAC: calcula como execUpper (operandos normalizados, mismas expresiones
-// en float) y aplica normalizeFmacResult a esa componente.
+// One component of an FMAC operation: computes as execUpper does (normalized operands, the same float
+// expressions) and applies normalizeFmacResult to that component.
 template <uint32_t Upper, uint32_t C>
 VU1_STEP_INLINE void VU1Interpreter::fmacLaneT(float &result, uint8_t &laneFlags, uint8_t &productFlags)
 {
@@ -360,7 +359,7 @@ VU1_STEP_INLINE void VU1Interpreter::fmacLaneT(float &result, uint8_t &laneFlags
         float acc = 0.0f;
         if constexpr (info.kind == vu1c::Kind::Madd || info.kind == vu1c::Kind::Msub || info.kind == vu1c::Kind::Opmsub)
             acc = normalizeOperand(m_state.acc[C]);
-        // Bits pegajosos del producto (calculateFmacProductSticky), también en la componente 3 de OPMSUB.
+        // Sticky bits of the product (calculateFmacProductSticky), also for component 3 of OPMSUB.
         if constexpr (info.kind == vu1c::Kind::Madd || info.kind == vu1c::Kind::Msub || info.kind == vu1c::Kind::Opmsub)
             productFlags = productStickyFlags(vs, right, vs * right);
 
@@ -383,10 +382,10 @@ VU1_STEP_INLINE void VU1Interpreter::fmacLaneT(float &result, uint8_t &laneFlags
             if (productSumFlagsFast(result, vs * right, laneFlags))
                 return;
         }
-        // GOW-Port: con un factor cero el producto exacto es ±0 (operandos normalizados) y el resultado en
-        // float ya es el exacto: en MUL/OPMULA un cero con el signo de vs XOR right; en MADD/MSUB/OPMSUB
-        // ACC ∓ 0, exacto también en float con las mismas reglas de signo, y ACC es cero o normal. Así
-        // normalizeFmacExactResult no cambiaría el valor y los flags son Z (si es cero) y S.
+        // With a zero factor the exact product is ±0 (normalized operands) and the float result is already exact: in
+        // MUL/OPMULA a zero with the sign of vs XOR right; in MADD/MSUB/OPMSUB ACC ∓ 0, also exact in float with the same
+        // sign rules, and ACC is zero or normal. So normalizeFmacExactResult would not change the value and the flags are
+        // Z (if zero) and S.
         if constexpr (info.kind == vu1c::Kind::Mul || info.kind == vu1c::Kind::Opmula || info.kind == vu1c::Kind::Madd ||
                       info.kind == vu1c::Kind::Msub || (info.kind == vu1c::Kind::Opmsub && C != 3u))
         {
@@ -440,7 +439,7 @@ VU1_STEP_INLINE void VU1Interpreter::upperT()
     }
     else if constexpr (constexpr uint32_t special = vu1c::simpleSpecial(Upper); special != 0u)
     {
-        // Copia de los casos de execUpper (ps2_vu1_upper.cpp) con los campos resueltos.
+        // Copy of execUpper's cases (ps2_vu1_upper.cpp) with the fields resolved.
         m_currentUpperInstruction = Upper;
         constexpr uint32_t dest = (Upper >> 21) & 0xFu;
         constexpr uint32_t ft = (Upper >> 16) & 0x1Fu;
@@ -469,12 +468,12 @@ VU1_STEP_INLINE void VU1Interpreter::upperT()
             queueClip(flags);
         }
 #if VU1C_SIMD
-        // GOW-Port: ITOF, FTOI y ABS en los cuatro carriles a la vez. Calculados carril a carril en la pila,
-        // la lectura de 16 bytes de applyDestT no podía reenviarse desde los cuatro stores de 4 bytes.
-        // ITOF: int -> float con el redondeo del MXCSR (como static_cast) y la escala 1/2^n es exacta.
-        // FTOI: x * 2^n en float es exacto salvo desbordamiento (infinito o el máximo, según el redondeo), y
-        // cualquier valor >= 2^31 satura a INT32_MAX; por debajo de -2^31, cvttps2dq da INT32_MIN, como
-        // floatToInt (los float cerca de 2^31 son múltiplos de 128: ">= INT32_MAX" equivale a ">= 2^31").
+        // ITOF, FTOI and ABS on all four lanes at once. Computed lane by lane on the stack, applyDestT's 16-byte read
+        // could not be forwarded from the four 4-byte stores.
+        // ITOF: int -> float with the MXCSR rounding (like static_cast); the 1/2^n scale is exact.
+        // FTOI: x * 2^n in float is exact except on overflow (infinity or the maximum, depending on rounding), and any
+        // value >= 2^31 saturates to INT32_MAX; below -2^31 cvttps2dq gives INT32_MIN, as floatToInt does (floats near
+        // 2^31 are multiples of 128: ">= INT32_MAX" is the same as ">= 2^31").
         else if constexpr (special <= 0x17u || special == 0x1Du)
         {
             const __m128 vs = _mm_loadu_ps(m_state.vf[fs]);
@@ -551,10 +550,9 @@ VU1_STEP_INLINE void VU1Interpreter::upperT()
         constexpr uint32_t dest = (Upper >> 21) & 0xFu;
         constexpr uint32_t fd = (Upper >> 6) & 0x1Fu;
 #if VU1C_SIMD
-        // Los cuatro carriles con SSE. Mismas operaciones en float que fmacLaneT (cada producto y suma se
-        // redondea por separado con el MXCSR del VU), así que el resultado es el mismo bit a bit. Si algún
-        // carril activo saldría del camino rápido de los flags (resultado o producto cerca de cero, de los
-        // extremos o con cancelación), se rehace todo con el código escalar de abajo.
+        // All four lanes with SSE. The same float operations as fmacLaneT (each product and sum rounds separately with
+        // the VU's MXCSR), so the result is bit-identical. If any active lane would leave the fast flag path (result or
+        // product near zero, near the extremes or with cancellation), everything is redone with the scalar code below.
         constexpr bool cross = info.kind == vu1c::Kind::Opmsub || info.kind == vu1c::Kind::Opmula;
         if constexpr (dest != 0u && !(cross && (dest & 1u) != 0u))
         {
@@ -605,27 +603,27 @@ VU1_STEP_INLINE void VU1Interpreter::upperT()
                     r = _mm_mul_ps(vs, right); // Mul, Opmula
                 const __m128i er = vu1c::exponent4(r);
                 const __m128i absMask = _mm_set1_epi32(0x7FFFFFFF);
-                // Un operando normalizado es cero: el producto exacto es cero con signo (como el redondeado).
+                // A normalized operand is zero: the exact product is a signed zero (like the rounded one).
                 const __m128i opZero = _mm_or_si128(
                     _mm_cmpeq_epi32(_mm_and_si128(_mm_castps_si128(vs), absMask), _mm_setzero_si128()),
                     _mm_cmpeq_epi32(_mm_and_si128(_mm_castps_si128(right), absMask), _mm_setzero_si128()));
                 __m128i ok;
                 if constexpr (productSum)
                 {
-                    // productSumFlagsFast (exponente del resultado 2..0xFD y no mucho menor que el del producto)
-                    // y productStickyFlags (exponente del producto 2..0xFD, o producto exactamente cero).
+                    // productSumFlagsFast (result exponent 2..0xFD and not much smaller than the product's) and productStickyFlags
+                    // (product exponent 2..0xFD, or a product of exactly zero).
                     const __m128i ep = vu1c::exponent4(product);
                     ok = _mm_and_si128(_mm_cmpgt_epi32(er, _mm_set1_epi32(1)), _mm_cmplt_epi32(er, _mm_set1_epi32(0xFE)));
                     ok = _mm_and_si128(ok, _mm_cmpgt_epi32(er, _mm_sub_epi32(ep, _mm_set1_epi32(21))));
                     const __m128i epOk = _mm_and_si128(_mm_cmpgt_epi32(ep, _mm_set1_epi32(1)), _mm_cmplt_epi32(ep, _mm_set1_epi32(0xFE)));
                     ok = _mm_and_si128(ok, _mm_or_si128(epOk, opZero));
-                    // GOW-Port: con un factor cero, ACC ∓ 0 es exacto en float (ACC es cero o normal), así que el
-                    // carril vale también con resultado cero o en los extremos; sus flags son Z (si es cero) y S.
+                    // With a zero factor, ACC ∓ 0 is exact in float (ACC is zero or normal), so the lane is valid also with a zero
+                    // result or at the extremes; its flags are Z (if zero) and S.
                     ok = _mm_or_si128(ok, opZero);
                     const __m128i rZero = _mm_cmpeq_epi32(_mm_and_si128(_mm_castps_si128(r), absMask), _mm_setzero_si128());
-                    // GOW-Port: con un factor ±1 el producto es exacto (el otro factor normalizado), así que el
-                    // resultado en float es la suma exacta redondeada una vez: con exponente 2..0xFD no cambia y
-                    // sus flags son el signo, y si ACC cancela exactamente el producto es un cero exacto (+0, Z).
+                    // With a ±1 factor the product is exact (the other factor is normalized), so the float result is the exact sum
+                    // rounded once: with exponent 2..0xFD it does not change and its flags are the sign, and if ACC cancels the
+                    // product exactly it is an exact zero (+0, Z).
                     const __m128i one = _mm_set1_epi32(0x3F800000);
                     const __m128i exactProduct = _mm_or_si128(
                         _mm_cmpeq_epi32(_mm_and_si128(_mm_castps_si128(vs), absMask), one),
@@ -641,9 +639,9 @@ VU1_STEP_INLINE void VU1Interpreter::upperT()
                 }
                 else
                 {
-                    // Add, Sub, Mul: exponente del resultado 1..0xFD, o cero exacto.
-                    // GOW-Port: con FTZ, r==0 tambien puede ocultar una cancelacion subnormal.
-                    // Comprobar operandos opuestos/iguales conserva su flag U en el camino escalar.
+                    // Add, Sub, Mul: result exponent 1..0xFD, or an exact zero.
+                    // With FTZ, r==0 can also hide a subnormal cancellation. Checking for opposite/equal operands keeps its U flag on
+                    // the scalar path.
                     ok = _mm_and_si128(_mm_cmpgt_epi32(er, _mm_setzero_si128()), _mm_cmplt_epi32(er, _mm_set1_epi32(0xFE)));
                     __m128i exactZero;
                     if constexpr (info.kind == vu1c::Kind::Add)
@@ -669,7 +667,7 @@ VU1_STEP_INLINE void VU1Interpreter::upperT()
                         m_state.status |= ((signs != 0 ? 0x2u : 0u) | (zeroLanes != 0 ? 0x1u : 0u) | productSticky) << 6;
                     else
                     {
-                        // Mismo MAC y status que updateFmacFlags con los flags por carril (Z = bit 0, S = bit 1).
+                        // Same MAC and status as updateFmacFlags with per-lane flags (Z = bit 0, S = bit 1).
                         const uint32_t z = static_cast<uint32_t>(zeroLanes) & static_cast<uint32_t>(lanes);
                         const uint32_t sg = static_cast<uint32_t>(signs) & static_cast<uint32_t>(lanes);
                         const uint32_t macStatus = vu1c::kMacStatus.v[z | (sg << 4)];
@@ -682,13 +680,13 @@ VU1_STEP_INLINE void VU1Interpreter::upperT()
             }
         }
 #endif
-        // GOW-Port: la ruta escalar (carriles fuera del camino rápido) va aparte y sin expandir en línea: así
-        // cada par compilado lleva solo la ruta SSE y los bloques caben mejor en la caché de instrucciones.
+        // The scalar path (lanes off the fast path) is separate and not inlined: each compiled pair carries only the SSE
+        // path and blocks fit the instruction cache better.
         fmacScalarT<Upper, DeadFlags>();
     }
 }
 
-// Ruta escalar de upperT para las FMAC (cuatro fmacLaneT, flags y destino), fuera de línea.
+// upperT's scalar path for FMACs (four fmacLaneT, flags and destination), out of line.
 template <uint32_t Upper, bool DeadFlags>
 VU1C_NOINLINE void VU1Interpreter::fmacScalarT()
 {
@@ -706,10 +704,9 @@ VU1C_NOINLINE void VU1Interpreter::fmacScalarT()
         {
             if constexpr (dest != 0u)
             {
-                // DeadFlags: el generador comprobó que, en este bloque, otra FMAC posterior escribe los flags
-                // antes de que nadie pueda leer estos. Con m_statusQuiet solo cuentan sus bits pegajosos,
-                // que el estado acumula en cualquier orden (y quedan igual al final del bloque).
-                // GOW-Port: no leer status ahora no hace muertos sus bits persistentes.
+                // DeadFlags: the generator checked that, in this block, a later FMAC writes the flags before anyone can read
+                // these. With m_statusQuiet only their sticky bits count, which the status accumulates in any order (and end up
+                // the same at the end of the block). Not reading status now does not make its persistent bits dead.
                 const uint32_t productSticky = (productFlags[0] | productFlags[1] | productFlags[2] | productFlags[3]) & 0xFu;
                 if (DeadFlags && m_statusQuiet)
                     m_state.status |= static_cast<uint32_t>((laneFlags[0] | laneFlags[1] | laneFlags[2] | laneFlags[3] | productSticky) & 0xFu) << 6;
@@ -733,9 +730,8 @@ VU1C_NOINLINE void VU1Interpreter::fmacScalarT()
         vu1c::applyDestT<dest>(target, result);
 }
 
-// Instrucciones inferiores frecuentes especializadas. Cada caso es copia exacta del de execLower
-// (ps2_vu1_lower.cpp); las demás llaman a execLower. Las huellas de repetir_cadena_vif comprueban que
-// coinciden con el intérprete.
+// Frequent lower instructions, specialized. Each case is an exact copy of execLower's (ps2_vu1_lower.cpp); the
+// rest call execLower. The repetir_cadena_vif fingerprints check they match the interpreter.
 template <uint32_t Lower>
 VU1_STEP_INLINE void VU1Interpreter::lowerT(StepContext &context, uint32_t upperInstr)
 {
@@ -777,7 +773,7 @@ VU1_STEP_INLINE void VU1Interpreter::lowerT(StepContext &context, uint32_t upper
             uint32_t words[4]{};
             std::memcpy(words, m_state.vf[fs], sizeof(words));
             if (m_xgkick.active)
-                xgkickAdvanceTo(m_cycle); // GOW-Port: PATH1 copia antes de que la VU escriba en su memoria
+                xgkickAdvanceTo(m_cycle); // PATH1 copies before the VU writes its memory
             vu1c::storeT<dest>(vuData + addr, words);
         }
     }
@@ -803,7 +799,7 @@ VU1_STEP_INLINE void VU1Interpreter::lowerT(StepContext &context, uint32_t upper
             const uint32_t val = static_cast<uint32_t>(static_cast<uint16_t>(m_state.vi[viT] & 0xFFFF));
             const uint32_t words[4] = {val, val, val, val};
             if (m_xgkick.active)
-                xgkickAdvanceTo(m_cycle); // GOW-Port: PATH1 copia antes de que la VU escriba en su memoria
+                xgkickAdvanceTo(m_cycle); // PATH1 copies before the VU writes its memory
             vu1c::storeT<dest>(vuData + addr, words);
         }
     }
@@ -818,11 +814,11 @@ VU1_STEP_INLINE void VU1Interpreter::lowerT(StepContext &context, uint32_t upper
                 m_state.vi[viT] = static_cast<int16_t>(m_state.vi[viS] - imm);
         }
     }
-    // GOW-Port: lectores de flags, BAL, JR y JALR, copias de execLower (ps2_vu1_lower.cpp). Eran el 85 % de las
-    // llamadas a execLower desde el código compilado.
+    // Flag readers, BAL, JR and JALR, copies of execLower (ps2_vu1_lower.cpp). They were 85% of the execLower calls
+    // from compiled code.
     else if constexpr (opHi == 0x12u) // FCAND
     {
-        commitReadyFlags(); // GOW-Port: flags listos en este ciclo
+        commitReadyFlags(); // flags ready in this cycle
         constexpr uint32_t imm24 = instr & 0xFFFFFFu;
         m_state.vi[1] = ((m_state.clip & imm24) != 0u) ? 1 : 0;
     }
@@ -855,7 +851,7 @@ VU1_STEP_INLINE void VU1Interpreter::lowerT(StepContext &context, uint32_t upper
     }
     else if constexpr (opHi == 0x24u || opHi == 0x25u) // JR / JALR
     {
-        // JR/JALR leen el VI actual; el valor retrasado se usa solo en las ramas condicionales.
+        // JR/JALR read the current VI; the delayed value is only used by conditional branches.
         const uint32_t target = (static_cast<uint32_t>(static_cast<uint16_t>(m_state.vi[viS])) * 8u) & microAddressMask();
         if constexpr (opHi == 0x25u && viT != 0)
             m_state.vi[viT] = static_cast<int32_t>((m_state.pc + 16) / 8);
@@ -952,7 +948,7 @@ VU1_STEP_INLINE void VU1Interpreter::lowerT(StepContext &context, uint32_t upper
             uint32_t words[4]{};
             std::memcpy(words, m_state.vf[fs], sizeof(words));
             if (m_xgkick.active)
-                xgkickAdvanceTo(m_cycle); // GOW-Port: PATH1 copia antes de que la VU escriba en su memoria
+                xgkickAdvanceTo(m_cycle); // PATH1 copies before the VU writes its memory
             vu1c::storeT<dest>(vuData + addr, words);
         }
         if constexpr (viT != 0)
@@ -963,7 +959,7 @@ VU1_STEP_INLINE void VU1Interpreter::lowerT(StepContext &context, uint32_t upper
     }
     else if constexpr (opHi == 0x40u && funct >= 0x3Cu && funct2 == 0x38u) // DIV
     {
-        // GOW-Port: DIV resuelto en compilacion; misma normalizacion, flags D/I y latencia que el interprete.
+        // DIV resolved at compile time; same normalization, D/I flags and latency as the interpreter.
         constexpr int fsf = (instr >> 21) & 0x3;
         constexpr int ftf = (instr >> 23) & 0x3;
         const float num = normalizeOperand(m_state.vf[fs][fsf]);
@@ -1005,14 +1001,13 @@ VU1_STEP_INLINE void VU1Interpreter::lowerT(StepContext &context, uint32_t upper
     else
     {
         if (m_xgkick.active)
-            xgkickAdvanceTo(m_cycle); // GOW-Port: puede escribir en la memoria de datos o iniciar un XGKICK
+            xgkickAdvanceTo(m_cycle); // may write data memory or start an XGKICK
         execLower(instr, vuData, dataSize, *context.gs, context.memory, upperInstr);
     }
 }
 
-// Un bloque compilado se ejecuta entero en orden: sus palabras coinciden con las de la micromemoria, no
-// hay un salto ni un final de programa pendiente y queda presupuesto de ciclos de sobra (el análisis de
-// vida de flags supone que se llega al final del bloque).
+// A compiled block runs entirely in order: its words match the micromemory, there is no pending branch or end of
+// program, and plenty of cycle budget remains (the flag liveness analysis assumes the end of the block is reached).
 VU1_STEP_INLINE void VU1Interpreter::pushFmacFlags(uint32_t mac, uint32_t status, uint32_t extraSticky)
 {
     static_assert((kMaxFlagEntries & (kMaxFlagEntries - 1u)) == 0u);
@@ -1044,8 +1039,8 @@ VU1_STEP_INLINE bool VU1Interpreter::blockPreconditions(StepContext &context, ui
         return false;
     if (m_cycle + 16384u >= context.budgetEnd || pc + bytes > context.codeSize)
         return false;
-    // GOW-Port: la micromemoria no cambia mientras no cambie su generación (compiledProgramFor la apunta al
-    // empezar cada ejecución); se recuerda el resultado de comparar cada bloque en vez de repetir el memcmp.
+    // Micromemory does not change while its generation does not (compiledProgramFor points at it at the start of each
+    // execution); the result of comparing each block is remembered instead of repeating the memcmp.
     struct Entry
     {
         const uint32_t *words;
@@ -1066,7 +1061,7 @@ VU1_STEP_INLINE uint64_t VU1Interpreter::readyCycleT() const
 {
     constexpr const DecodedInstructionPair &k = T::value;
     uint64_t ready = m_cycle;
-    // Lecturas de VF de las dos instrucciones (índices y componentes constantes).
+    // VF reads of both instructions (constant indices and components).
 #define VU1C_VF_READS(USAGE)                                                                     \
     if constexpr (k.USAGE.vfReadCount > 0u)                                                      \
     {                                                                                            \
@@ -1123,10 +1118,10 @@ VU1_STEP_INLINE bool VU1Interpreter::stepPairT(StepContext &context)
 {
     constexpr const DecodedInstructionPair &k = T::value;
 
-    // Igual que compiledPrologue + stepPair.
-    // GOW-Port: Chained = par que no es el primero de su bloque. El par anterior acaba de confirmar los
-    // pipelines en este mismo ciclo, y blockPreconditions dejó al entrar 16384 ciclos de margen hasta el
-    // final del presupuesto (las esperas de abajo lo siguen comprobando).
+    // Same as compiledPrologue + stepPair.
+    // Chained = a pair that is not the first of its block. The previous pair has just committed the pipelines in this
+    // same cycle, and blockPreconditions left 16384 cycles of margin to the end of the budget on entry (the waits below
+    // still check it).
     if constexpr (Chained)
     {
         if (m_stopRequested)
@@ -1143,7 +1138,7 @@ VU1_STEP_INLINE bool VU1Interpreter::stepPairT(StepContext &context)
     if constexpr (k.lowerUsage.pipeline == PipelineXgkick)
     {
         if (m_xgkick.active)
-            xgkickAdvanceTo(m_cycle); // GOW-Port: saber si el envío anterior sigue activo
+            xgkickAdvanceTo(m_cycle); // know whether the previous submission is still active
     }
     uint64_t readyCycle = readyCycleT<T>();
     if (readyCycle > m_cycle)
@@ -1236,15 +1231,15 @@ VU1_STEP_INLINE bool VU1Interpreter::stepPairT(StepContext &context)
     }
     if constexpr (writtenVi != 0u && k.lowerUsage.delaysNextBranchRead)
     {
-        // GOW-Port: recordViWriteForBranch en línea (era una llamada en cada par que escribe un VI).
+        // recordViWriteForBranch inline (it was a call on every pair that writes a VI).
         m_viBranchBackupValue = oldVi;
         m_viBranchBackupReg = static_cast<uint8_t>(writtenVi);
         m_viBranchBackupValid = true;
     }
 
-    // GOW-Port: VF0 con un solo store de 16 bytes: la lectura de 16 bytes de VF0 en el par siguiente
-    // (vf00w = 1.0 es muy frecuente) no puede reenviarse desde cuatro stores de 4 bytes.
-    // GOW-Port: solo si el par puede haber escrito VF0 o VI0 (las inferiores en línea nunca escriben VI0).
+    // VF0 with a single 16-byte store: the 16-byte read of VF0 in the next pair (vf00w = 1.0 is very common) cannot be
+    // forwarded from four 4-byte stores. Only when the pair may have written VF0 or VI0 (inline lower instructions
+    // never write VI0).
     constexpr bool mayWriteVf0 = vu1c::upperMayWriteVf0(k.upper) ||
                                  (!k.iBit && (!vu1c::lowerInline(k.lower) || vu1c::lowerInlineWritesVf0(k.lower)));
     constexpr bool mayWriteVi0 = !k.iBit && !vu1c::lowerInline(k.lower);
@@ -1253,18 +1248,18 @@ VU1_STEP_INLINE bool VU1Interpreter::stepPairT(StepContext &context)
     if constexpr (mayWriteVi0)
         m_state.vi[0] = 0;
 
-    // Plain: par intermedio de un bloque que no salta ni termina. blockPreconditions garantiza que al
-    // entrar no había salto, bit E ni final pendientes, y solo el último par del bloque puede crearlos, así
-    // que basta con avanzar el PC (el par siguiente está en el bloque, sin pasar del final de la memoria).
+    // Plain: an intermediate pair of a block that neither branches nor ends. blockPreconditions guarantees there was no
+    // pending branch, E bit or end on entry, and only the block's last pair can create them, so advancing the PC is
+    // enough (the next pair is in the block, without running past the end of memory).
     if constexpr (Plain)
     {
         m_state.pc += 8u;
         ++m_cycle;
-        // GOW-Port: m_state.cycles lo fija run() al terminar; nada lo lee durante la ejecución.
+        // run() sets m_state.cycles when it finishes; nothing reads it during execution.
         if (m_cycle >= m_nextCommitCycle)
             commitReadyPipelines();
         if (m_cycle >= m_xgkickEvent)
-            xgkickAdvanceTo(m_cycle); // GOW-Port: PATH1 solo en sus eventos
+            xgkickAdvanceTo(m_cycle); // PATH1 only on its events
         return true;
     }
 
@@ -1314,16 +1309,16 @@ VU1_STEP_INLINE bool VU1Interpreter::stepPairT(StepContext &context)
         m_pendingHaltT = tHalt;
     }
 
-    // advanceOneCycle con las comprobaciones en línea.
+    // advanceOneCycle with the checks inline.
     ++m_cycle;
     if (m_cycle >= m_nextCommitCycle)
         commitReadyPipelines();
     if (m_cycle >= m_xgkickEvent)
-        xgkickAdvanceTo(m_cycle); // GOW-Port: PATH1 solo en sus eventos
+        xgkickAdvanceTo(m_cycle); // PATH1 only on its events
     return !context.programEnded;
 }
 
-// Acceso del código generado (repartido en varios archivos) a lo que necesita del intérprete.
+// Access for generated code (split over several files) to what it needs from the interpreter.
 struct VU1CompiledAccess
 {
     using P = VU1Interpreter::DecodedInstructionPair;

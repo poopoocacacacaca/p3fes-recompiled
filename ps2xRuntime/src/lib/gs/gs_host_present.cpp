@@ -1,6 +1,6 @@
-// GOW-Port: contexto host, selección de frames y dibujo raylib usados por el port.
+// host context, frame selection and raylib drawing used by the port.
 #include "runtime/gs/gs_host_present.h"
-#include "runtime/gs/gs_host_present_diag.h" // GOW-Port: ventana sin lecturas GPU adicionales.
+#include "runtime/gs/gs_host_present_diag.h" // window without extra GPU reads.
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/ps2_perf.h"
 #include "ps2_log.h"
@@ -42,7 +42,7 @@ void GSHostPresentation::createFallback()
     Image blank = GenImageColor(kWidth, kHeight, BLANK);
     fallback = LoadTextureFromImage(blank);
     UnloadImage(blank);
-    SetTextureFilter(fallback, TEXTURE_FILTER_POINT); // Coincide con la ruta RAM original.
+    SetTextureFilter(fallback, TEXTURE_FILTER_POINT); // Matches the original RAM path.
     upload.resize(static_cast<size_t>(kWidth) * kHeight * 4u, 0u);
 }
 
@@ -92,25 +92,25 @@ GSHostPresentation::View GSHostPresentation::prepare(GS &gs, uint64_t vsyncTick)
     current.shared = shared;
     if (shared)
     {
-        // GOW-Port: la llamada anterior ya terminó EndDrawing, incluido el batch.
-        // Acquire puede conservar el slot previo; la ruta normal no descarga píxeles.
+        // The previous call already finished EndDrawing, including the batch. Acquire may keep the previous slot; the
+        // normal path downloads no pixels.
         GSSharedPresent::Frame frame;
         if (GSSharedPresent::Acquire(frame))
         {
             current.frame = frame;
             if (frame.sequence != lastSharedSequence)
             {
-                // GOW-Port: observar la textura adquirida sin otra lectura ni otra barrera.
+                // observe the acquired texture without another read or barrier.
                 static const bool diagnostic = [] {
                     const char *v = std::getenv("PS2X_GS_PRESENT_DIAG");
                     return v && std::strcmp(v, "1") == 0;
                 }();
-                // GOW-Port: desplazar el registro sin elevar su cupo ni cambiar la presentación.
+                // shift the log without raising its quota or changing presentation.
                 static const uint64_t diagnosticFromTick = GSHostPresentDiag::parseFromTick(
                     std::getenv("PS2X_GS_PRESENT_DIAG_FROM_TICK"));
                 if (diagnostic && GSHostPresentDiag::consume(vsyncTick, diagnosticFromTick, diagnosticSharedFrames))
                 {
-                    // GOW-Port: sourceFbp son páginas DISPFB o bloques TEX0 según la fuente adquirida.
+                    // sourceFbp is DISPFB pages or TEX0 blocks depending on the acquired source.
                     std::fprintf(stderr, "[gs-present:shared] seq=%llu render=%llu hostTick=%llu frameTick=%llu displayFbp=%u sourceFbp=%u preferred=%u smode2=%llu width=%u height=%u hashValid=%u hash=%016llx blank=%u\n",
                         (unsigned long long)frame.sequence, (unsigned long long)frame.renderSequence,
                         (unsigned long long)vsyncTick, (unsigned long long)frame.vsyncTick,
@@ -120,7 +120,7 @@ GSHostPresentation::View GSHostPresentation::prepare(GS &gs, uint64_t vsyncTick)
                 }
                 gs.recordAcquiredSharedFrame(frame);
                 lastSharedSequence = frame.sequence;
-                // GOW-Port: captura separada explícita; usa esta misma reserva/textura adquirida.
+                // explicit separate capture; uses this same reservation/acquired texture.
                 acquiredCapture.capture(frame, vsyncTick);
             }
             if (!frame.blank && frame.texture != 0u && frame.width != 0u && frame.height != 0u)
@@ -209,7 +209,7 @@ GSHostPresentation::View GSHostPresentation::renderFrame(GS &gs, uint64_t vsyncT
     const Rectangle destination{(screenWidth - destinationWidth) * 0.5f,
                                 (screenHeight - destinationHeight) * 0.5f,
                                 destinationWidth, destinationHeight};
-    // GOW-Port: textura del PBO con filas en orden; no invertir source.height.
+    // PBO texture with rows in order; do not flip source.height.
     DrawTexturePro(selected.texture, source, destination, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
     if (overlay)
         overlay();
@@ -224,11 +224,11 @@ void GSHostPresentation::shutdown(GS &gs)
 {
     if (!started && fallback.id == 0u)
         return;
-    // GOW-Port: nullptr crea CPU; drena y destruye el worker/contexto compartido.
+    // nullptr creates the CPU backend; drains and destroys the worker/shared context.
     gs.setRasterBackend(nullptr);
     restoreHostContext();
     if (fallback.id != 0u)
-        UnloadTexture(fallback); // Nunca descargar la Texture2D prestada del productor.
+        UnloadTexture(fallback); // Never unload the producer's borrowed Texture2D.
     fallback = {};
     if (captureRequested)
         GSSharedPresent::ShutdownHost();

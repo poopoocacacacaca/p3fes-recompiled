@@ -250,13 +250,13 @@ PS2Memory::PS2Memory()
     ps2SetScratchpadHostPtr(nullptr);
 }
 
-// GOW-Port: VIF1/VU1 en un hilo propio, como el MTVU de PCSX2 (PS2X_VU1_HILO=1, desactivado por defecto).
-// El EE sigue tras lanzar el DMA de VIF1 (que ya se daba por terminado al instante); este hilo procesa los
-// datos en el mismo orden: desempaquetado, microprogramas de VU1 y sus paquetes GIF (PATH1/PATH2). El EE
-// espera a que termine (syncVu1Worker) antes de tocar algo de VIF1, VU1 o del GIF.
+// VIF1/VU1 on their own thread, like PCSX2's MTVU (PS2X_VU1_HILO=1, off by default). The EE continues after
+// starting the VIF1 DMA (which was already treated as finished at once); this thread processes the data in the
+// same order: unpacking, VU1 microprograms and their GIF packets (PATH1/PATH2). The EE waits for it
+// (syncVu1Worker) before touching anything of VIF1, VU1 or the GIF.
 namespace
 {
-// Uno solo: el del PS2Memory que lo activó (el juego tiene una única memoria).
+// Only one: that of the PS2Memory that enabled it (the game has a single memory).
 struct Vu1Worker
 {
     const PS2Memory *owner = nullptr;
@@ -275,18 +275,18 @@ struct Vu1Worker
         std::mutex mutex;
         std::condition_variable workCv;
         std::condition_variable idleCv;
-        // Lotes: [ruta u8][tamaño u32][datos] seguidos. El hilo de VU1 llena uno por envío (sin reservar
-        // memoria ni despertar a nadie por paquete) y lo publica al terminar el envío.
+        // Batches: [path u8][size u32][data] back to back. The VU1 thread fills one per submission (without allocating
+        // or waking anyone per packet) and publishes it when the submission ends.
         std::deque<std::vector<uint8_t>> queue;
         std::vector<std::vector<uint8_t>> spare;
-        std::vector<uint8_t> filling; // solo lo toca el hilo de VU1
+        std::vector<uint8_t> filling; // only touched by the VU1 thread
         bool busy = false;
         bool stop = false;
     };
     std::unique_ptr<Front> front;
 };
 std::unique_ptr<Vu1Worker> g_vu1Worker;
-// Lo pone el propio hilo de VU1 al arrancar (Vu1Worker::id se asigna después de crearlo y podría llegar tarde).
+// Set by the VU1 thread itself on start (Vu1Worker::id is assigned after creating it and could arrive late).
 thread_local bool t_onVu1Worker = false;
 thread_local bool t_onGsFront = false;
 void publishGsFrontBatch(Vu1Worker &worker);
@@ -316,13 +316,14 @@ bool PS2Memory::vu1WorkerEnabled()
         {
             g_vu1Worker->front = std::make_unique<Vu1Worker::Front>();
             g_vu1Worker->front->thread = std::thread([this] { gsFrontLoop(); });
-            std::fprintf(stderr, "[gs-frente] paquetes GIF de VU1 en un hilo propio\n");
+            std::fprintf(stderr, "[gs-front] VU1 GIF packets on their own thread\n");
         }
         g_vu1Worker->thread = std::thread([this] { vu1WorkerLoop(); });
         g_vu1Worker->id = g_vu1Worker->thread.get_id();
-        std::fprintf(stderr, "[vu1-hilo] VIF1/VU1 en un hilo propio\n");
+        std::fprintf(stderr, "[vu1-thread] VIF1/VU1 on their own thread\n");
     }
-    // Un solo hilo, del primer PS2Memory que lo pide; otra memoria a la vez (pruebas) procesa VIF1 en su hilo.
+    // A single thread, for the first PS2Memory that asks; another memory at the same time (tests) processes VIF1 on
+    // its own thread.
     return g_vu1Worker->owner == this;
 }
 
@@ -382,7 +383,7 @@ bool PS2Memory::enqueueGsFront(GifPathId path, const uint8_t *data, uint32_t siz
     batch[at] = static_cast<uint8_t>(path);
     std::memcpy(batch.data() + at + 1u, &sizeBytes, 4u);
     std::memcpy(batch.data() + at + 5u, data, sizeBytes);
-    // Publicar pronto: el GS empieza mientras la VU1 sigue (esperar al final del envío lo retrasa todo).
+    // Publish early: the GS starts while VU1 continues (waiting for the end of the submission delays everything).
     if (batch.size() >= kGsFrontPublishBytes)
         publishGsFrontBatch(*g_vu1Worker);
     return true;
@@ -390,7 +391,7 @@ bool PS2Memory::enqueueGsFront(GifPathId path, const uint8_t *data, uint32_t siz
 
 namespace
 {
-// Desde el hilo de VU1, al terminar cada envío: publica el lote de paquetes GIF.
+// From the VU1 thread, after each submission: publishes the batch of GIF packets.
 void publishGsFrontBatch(Vu1Worker &worker)
 {
     if (!worker.front || worker.front->filling.empty())
@@ -415,7 +416,7 @@ void publishGsFrontBatch(Vu1Worker &worker)
 void PS2Memory::gsFrontLoop()
 {
     t_onGsFront = true;
-    t_onVu1Worker = true; // sus llamadas a la memoria no esperan al hilo de VU1 (ni a sí mismo)
+    t_onVu1Worker = true; // its memory calls do not wait for the VU1 thread (or for itself)
     Vu1Worker::Front &front = *g_vu1Worker->front;
     for (;;)
     {
@@ -447,7 +448,7 @@ void PS2Memory::gsFrontLoop()
         if (last)
         {
             front.idleCv.notify_all();
-            // FINISH/SIGNAL salen de aquí: despertar al EE cuando se vacía la cola.
+            // FINISH/SIGNAL come from here: wake the EE when the queue empties.
             if (m_vu1WorkerNotify)
                 m_vu1WorkerNotify();
         }
@@ -580,7 +581,7 @@ bool PS2Memory::initialize(size_t ramSize)
     m_codeRegions.clear();
     m_path3Masked = false;
     m_path3MaskedFifo.clear();
-    // GOW-Port: descartar cualquier DIRECT incompleto al inicializar VIF1.
+    // drop any incomplete DIRECT when initializing VIF1.
     m_vif1DirectBytesRemaining = 0u;
     m_vif1DirectHl = false;
     m_vif1DirectPayload.clear();
@@ -662,8 +663,8 @@ void PS2Memory::resetEeTimers() noexcept
 
 namespace
 {
-    // GOW-Port: buffers de las cadenas DMA ya procesadas. Cada envío construía un vector nuevo y lo hacía
-    // crecer copia a copia; reutilizar uno con capacidad evita las reservas y copias repetidas.
+    // Buffers for already processed DMA chains. Each submission built a new vector and grew it copy by copy;
+    // reusing one with capacity avoids the repeated allocations and copies.
     thread_local std::vector<std::vector<uint8_t>> g_chainSpare;
 
     std::vector<uint8_t> takeChainBuffer()
@@ -716,13 +717,13 @@ uint32_t PS2Memory::advanceEeTimers(uint64_t eeCycles) noexcept
         uint64_t ticks = 0u;
         if (clockSource < 3u && eeCycles < kEeClockHz)
         {
-            // GOW-Port: BUSCLK/2, /32 y /512 dividen exactamente el reloj del EE (clock = Hz / d). Con
-            // R = q * clock + r (r < clock), floor((ciclos * clock + R) / Hz) = (ciclos + q) / d y el resto nuevo es
-            // ((ciclos + q) % d) * clock + r: lo mismo que la cuenta de abajo, sin divisiones de 64 bits.
+            // BUSCLK/2, /32 and /512 divide the EE clock exactly (clock = Hz / d). With R = q * clock + r (r < clock),
+            // floor((cycles * clock + R) / Hz) = (cycles + q) / d and the new remainder is ((cycles + q) % d) * clock + r:
+            // the same as the computation below, without 64-bit divisions.
             const auto step = [&](auto shiftTag)
             {
                 constexpr uint32_t shift = decltype(shiftTag)::value;
-                constexpr uint64_t clockHz = kEeClockHz >> shift; // constante: la división es una multiplicación
+                constexpr uint64_t clockHz = kEeClockHz >> shift; // constant: the division is a multiplication
                 const uint64_t q = timer.clockRemainder / clockHz;
                 const uint64_t r = timer.clockRemainder - q * clockHz;
                 const uint64_t units = eeCycles + q;
@@ -848,7 +849,7 @@ uint8_t *PS2Memory::mapVuMemory(uint32_t physAddr, uint32_t size, uint32_t &offs
 const uint8_t *PS2Memory::mapVuMemory(uint32_t physAddr, uint32_t size, uint32_t &offset, uint32_t &limit) const
 {
     if (physAddr >= 0x11000000u && physAddr < 0x11010000u)
-        syncVu1Worker(); // GOW-Port: VU1 puede estar trabajando en su hilo
+        syncVu1Worker(); // VU1 may be working on its thread
     auto mapRange = [&](uint32_t base, uint32_t rangeSize, const uint8_t *ptr) -> const uint8_t *
     {
         if (!ptr || physAddr < base)
@@ -1415,7 +1416,7 @@ void PS2Memory::write128(uint32_t address, __m128i value)
     }
     if (!scratch && physAddr == 0x10005000u) // VIF1_FIFO
     {
-        syncVu1Worker(); // GOW-Port: el orden de los datos de VIF1
+        syncVu1Worker(); // VIF1 data order
         alignas(16) uint8_t fifoData[16];
         _mm_storeu_si128(reinterpret_cast<__m128i *>(fifoData), value);
         processVIF1Data(fifoData, sizeof(fifoData));
@@ -1486,7 +1487,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
             std::fprintf(stderr, "[ipu-io] %08X <- %08X\n", address, value);
     }
     if (address >= 0x10003C00u && address < 0x10004000u)
-        syncVu1Worker(); // GOW-Port: VIF1
+        syncVu1Worker(); // VIF1
     size_t timerIndex = 0u;
     uint32_t timerOffset = 0u;
     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
@@ -1592,7 +1593,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
             {
                 const bool wasPath3Masked = m_path3Masked;
                 std::memset(&vif1_regs, 0, sizeof(vif1_regs));
-                // GOW-Port: FBRST también descarta la carga DIRECT pendiente y su prioridad.
+                // FBRST also drops the pending DIRECT load and its priority.
                 m_vif1DirectBytesRemaining = 0u;
                 m_vif1DirectHl = false;
                 m_vif1DirectPayload.clear();
@@ -1722,8 +1723,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     uint32_t asr1 = m_ioRegisters[channelBase + 0x50];
                     uint32_t asp = (chcr >> 4) & 0x3u;
                     const bool tieEnabled = (chcr & (1u << 7)) != 0u;
-                    // GOW-Port: las cadenas largas (mas de 4096 tags) se cortaban y dejaban el GIF en modo IMAGE
-                    // (fork de SotC, e36fbf1).
+                    // long chains (more than 4096 tags) were cut short and left the GIF in IMAGE mode (SotC fork, e36fbf1).
                     const int kMaxChainTags = 1 << 20;
                     std::vector<uint8_t> chainBuf = takeChainBuffer();
 
@@ -2171,7 +2171,7 @@ bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
     return true;
 }
 
-// GOW-Port: cadenas DMA del scratchpad (canales 8 y 9), según la especificación del DMAC del EE.
+// scratchpad DMA chains (channels 8 and 9), per the EE DMAC specification.
 void PS2Memory::completeDmacChannel(uint32_t channelBase, uint32_t cause)
 {
     static constexpr uint32_t kDStat = 0x1000E010u;
@@ -2192,7 +2192,7 @@ void PS2Memory::completeDmacChannel(uint32_t channelBase, uint32_t cause)
 void PS2Memory::processPendingTransfers()
 {
     if (!m_pendingGifTransfers.empty())
-        syncVu1Worker(); // GOW-Port: PATH3 detrás de PATH1/PATH2 del hilo de VU1
+        syncVu1Worker(); // PATH3 after PATH1/PATH2 from the VU1 thread
     const bool hadGif = !m_pendingGifTransfers.empty();
     uint32_t observedGifQwc = 0u;
     for (const auto &transfer : m_pendingGifTransfers)
@@ -2335,7 +2335,7 @@ void PS2Memory::processPendingTransfers()
     m_pendingVif0Transfers.clear();
 
     const bool hadVif1 = !m_pendingVif1Transfers.empty();
-    // GOW-Port: con el hilo de VU1, se le pasan los datos (copiados ahora: el EE puede reescribir la RAM).
+    // with the VU1 thread, the data is handed over (copied now: the EE may overwrite RAM).
     const bool vu1Thread = hadVif1 && vu1WorkerEnabled();
     for (auto &p : m_pendingVif1Transfers)
     {
@@ -2432,7 +2432,7 @@ void PS2Memory::processPendingTransfers()
     recycleChainBuffers(m_pendingVif1Transfers);
     m_pendingVif1Transfers.clear();
 
-    if (m_gifArbiter && !g_vu1Worker) // GOW-Port: con el hilo de VU1, lo vacía ese hilo tras cada envío
+    if (m_gifArbiter && !g_vu1Worker) // with the VU1 thread, that thread drains it after each submission
         m_gifArbiter->drain();
 
     static constexpr uint32_t GIF_CHANNEL = 0x1000A000;
@@ -2567,7 +2567,7 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t 
 {
     if (!data || sizeBytes < 16)
         return;
-    syncVu1Worker(); // GOW-Port: desde el EE, después de lo que tenga pendiente el hilo de VU1
+    syncVu1Worker(); // from the EE, after whatever the VU1 thread has pending
 
     if (pathId == GifPathId::Path3)
     {
@@ -2624,14 +2624,14 @@ void PS2Memory::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
 
 bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint32_t chcr)
 {
-    // GOW-Port: estos atajos eliminan tags; el observador necesita el flujo genérico completo.
+    // these shortcuts drop tags; the observer needs the full generic stream.
     if (gs.hasExternalObserver()) return false;
-    syncVu1Worker(); // GOW-Port: el GS y el árbitro los usa también el hilo de VU1
+    syncVu1Worker(); // the GS and the arbiter are also used by the VU1 thread
     static constexpr uint32_t GIF_CHANNEL = 0x1000A000u;
     static constexpr uint32_t D_STAT = 0x1000E010u;
     static constexpr uint32_t D_CTRL = 0x1000E000u;
 
-    // GOW-Port: una etiqueta/payload pendiente debe completarse por el parser PATH3.
+    // a pending tag/payload must be completed by the PATH3 parser.
     if (!m_rdram || !m_gsVRAM || m_path3Masked || gs.hasPendingGIFPacket(GifPathId::Path3))
         return false;
     if (m_gifArbiter && !m_gifArbiter->empty())
@@ -2741,7 +2741,7 @@ bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint3
         return false;
 
     const uint64_t imageTagLo = loadScalar<uint64_t>(imageGifTag, 0u, 16u, "native gif image tag", imageTagDmaAddr + 16u);
-    // GOW-Port: el atajo acepta los mismos formatos de imagen que el frontend.
+    // the shortcut accepts the same image formats as the frontend.
     if (gifTagFlg(imageTagLo) != GIF_FMT_IMAGE && gifTagFlg(imageTagLo) != GIF_FMT_IMAGE2)
         return false;
 
@@ -2798,7 +2798,7 @@ bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint3
     m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
     m_seenGifCopy = true;
     m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
-    // GOW-Port: mantener los efectos de la GIFtag PACKED sin perder el atajo DMA de texturas.
+    // keep the effects of the PACKED GIFtag without losing the texture DMA shortcut.
     const uint64_t setupGifTag = loadScalar<uint64_t>(setupPayload, 0u, 80u, "native gif setup tag", setupPayloadAddr);
     gs.uploadImageNative(setupRegs[0], setupRegs[1], setupRegs[2], setupRegs[3], imageData, imageBytes, setupGifTag);
 
@@ -2823,9 +2823,9 @@ bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint3
 
 bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t chcr)
 {
-    // GOW-Port: estos atajos eliminan tags; el observador necesita el flujo genérico completo.
+    // these shortcuts drop tags; the observer needs the full generic stream.
     if (gs.hasExternalObserver()) return false;
-    syncVu1Worker(); // GOW-Port: el GS y el árbitro los usa también el hilo de VU1
+    syncVu1Worker(); // the GS and the arbiter are also used by the VU1 thread
     static constexpr uint32_t GIF_CHANNEL = 0x1000A000u;
     static constexpr uint32_t D_STAT = 0x1000E010u;
     static constexpr uint32_t D_CTRL = 0x1000E000u;
@@ -2914,7 +2914,7 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
     if (ps2ipu::isRegister(address))
         return ps2ipu::read32(address);
     if ((address >= 0x10003C00u && address < 0x10004000u) || (address >= 0x10009000u && address < 0x1000A000u))
-        syncVu1Worker(); // GOW-Port: VIF1 y su canal DMA
+        syncVu1Worker(); // VIF1 and its DMA channel
     size_t timerIndex = 0u;
     uint32_t timerOffset = 0u;
     if (decodeEeTimerRegister(address, timerIndex, timerOffset))

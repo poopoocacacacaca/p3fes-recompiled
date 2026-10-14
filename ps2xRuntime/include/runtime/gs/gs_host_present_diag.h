@@ -1,4 +1,4 @@
-// GOW-Port: ventana opcional del registro; no controla render, fences ni Acquire.
+// optional log window; does not control rendering, fences or Acquire.
 #pragma once
 #include <cstdint>
 #include <limits>
@@ -21,7 +21,7 @@ namespace GSHostPresentDiag
 
     inline bool consume(uint64_t hostTick, uint64_t fromTick, uint32_t &records) noexcept
     {
-        // GOW-Port: las adquisiciones anteriores no gastan el cupo de 4096 por instancia.
+        // earlier acquisitions do not use up the per-instance quota of 4096.
         if (hostTick < fromTick || records >= 4096u) return false;
         ++records;
         return true;

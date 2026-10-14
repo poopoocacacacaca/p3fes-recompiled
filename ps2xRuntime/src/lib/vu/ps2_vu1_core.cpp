@@ -19,10 +19,10 @@
 #include <ps2_log.h>
 #include "runtime/ps2_perf.h"
 
-// GOW-Port: la aritmética de VU no depende de /fp:fast. El runtime se compila con /fp:fast, que deja al
-// compilador fusionar a*b+c en FMA según dónde esté el código: el intérprete y el microcódigo compilado
-// (o dos versiones del intérprete) podían dar resultados distintos. Aquí cada operación se redondea por
-// separado, como en las FMAC de la PS2 (y en PCSX2).
+// VU arithmetic does not depend on /fp:fast. The runtime builds with /fp:fast, which lets the compiler fuse
+// a*b+c into FMA depending on where the code is: the interpreter and the compiled microcode (or two copies of
+// the interpreter) could give different results. Here each operation rounds separately, as in the PS2's FMACs
+// (and in PCSX2).
 #if defined(_MSC_VER)
 #pragma float_control(precise, on, push)
 #pragma fp_contract(off)
@@ -30,8 +30,8 @@
 
 namespace
 {
-    // GOW-Port: GOW_XGKICK_IMMEDIATE se lee una vez (-1 = sin leer). getenv recorre el entorno
-    // completo; leerlo en cada XGKICK ocupaba un tercio del hilo del juego (ucrtbase!strchr).
+    // PS2X_XGKICK_IMMEDIATE is read once (-1 = not read yet). getenv scans the whole environment; reading it on every
+    // XGKICK took a third of the game thread (ucrtbase!strchr).
     std::atomic<int> g_xgkickImmediate{-1};
 
     bool xgkickImmediate()
@@ -39,7 +39,7 @@ namespace
         int value = g_xgkickImmediate.load(std::memory_order_relaxed);
         if (value < 0)
         {
-            const char *setting = std::getenv("GOW_XGKICK_IMMEDIATE");
+            const char *setting = std::getenv("PS2X_XGKICK_IMMEDIATE");
             value = (setting && std::strcmp(setting, "1") == 0) ? 1 : 0;
             g_xgkickImmediate.store(value, std::memory_order_relaxed);
         }
@@ -104,8 +104,8 @@ void VU1Interpreter::setDirectRegisterWrites(bool enabled)
 
 void VU1Interpreter::resetScheduler()
 {
-    commitReadyFlags(); // GOW-Port: las ya listas se habrían confirmado en su ciclo
-    m_lastRunHitBudget = false; // GOW-Port
+    commitReadyFlags(); // the ones already ready would have been committed in their cycle
+    m_lastRunHitBudget = false;
     m_nextCommitCycle = ~0ull;
     m_flagPipeline = {};
     m_fdiv = {};
@@ -202,7 +202,7 @@ void VU1Interpreter::recordViWriteForBranch(uint8_t reg, int32_t oldValue)
 
 void VU1Interpreter::applyDest(float *dst, const float *result, uint8_t dest)
 {
-    // GOW-Port: un único store de 16 bytes (ver applyDestT en ps2_vu1_compiled.inl).
+    // a single 16-byte store (see applyDestT in ps2_vu1_compiled.inl).
     vu1StoreLanes(dst, result, dest);
 }
 
@@ -214,8 +214,8 @@ void VU1Interpreter::applyDestAcc(const float *result, uint8_t dest)
 void VU1Interpreter::normalizeFmacResult(float *result, uint8_t dest,
                                          uint8_t laneFlags[4])
 {
-    // GOW-Port: decodifica la operación una vez por instrucción (antes calculateFmacExactResult
-    // recorría el switch de opcodes en cada componente). Mismas fórmulas en long double.
+    // decodes the operation once per instruction (calculateFmacExactResult used to walk the opcode switch for every
+    // component). Same formulas in long double.
     enum class Kind : uint8_t { None, Add, Sub, Madd, Msub, Mul, Opmsub, Opmula };
     enum class Source : uint8_t { Broadcast, Q, I, Vector };
     const uint32_t upper = m_currentUpperInstruction;
@@ -292,9 +292,9 @@ void VU1Interpreter::normalizeFmacResult(float *result, uint8_t dest,
         laneFlags[component] = 0u;
         if ((dest & laneForComponent(component)) == 0u)
             continue;
-        // GOW-Port: en ADD/SUB/MUL el resultado en float se redondea hacia cero desde el exacto. Si es normal y
-        // no está en el exponente máximo, el exacto no es cero ni desborda ni se queda por debajo del mínimo:
-        // el valor no cambia y los flags son solo el signo. Así se evita el cálculo en long double.
+        // In ADD/SUB/MUL the float result rounds toward zero from the exact one. If it is normal and not at the maximum
+        // exponent, the exact value is not zero, does not overflow and is not below the minimum: the value does not change
+        // and the flags are just the sign. This avoids the long double computation.
         if (kind == Kind::Add || kind == Kind::Sub || kind == Kind::Mul)
         {
             uint32_t bits = 0u;
@@ -859,8 +859,8 @@ void VU1Interpreter::commitReadyPipelines()
 {
     if (m_cycle < m_nextCommitCycle)
         return;
-    // GOW-Port: caso frecuente (código FMAC denso con escrituras directas): solo hay flags pendientes.
-    // Se confirman en orden y el siguiente ciclo es el de la cabeza de la cola, como en el caso general.
+    // Common case (dense FMAC code with direct writes): only flags are pending. They commit in order and the next cycle
+    // is that of the queue head, as in the general case.
     if ((m_storePending | m_vfPending | m_viPending | m_accPending) == 0u && !m_fdiv.valid &&
         !m_efu[0].valid && !m_efu[1].valid)
     {
@@ -908,7 +908,7 @@ void VU1Interpreter::commitReadyPipelines()
         }
         if (entry.writesClip)
             m_state.clip = entry.clip;
-        entry.valid = false; // GOW-Port: pushFlagEntry inicializa todos los campos
+        entry.valid = false; // pushFlagEntry initializes every field
     }
 
     if (m_fdiv.valid && m_fdiv.readyCycle <= m_cycle)
@@ -916,7 +916,7 @@ void VU1Interpreter::commitReadyPipelines()
         m_state.q = m_fdiv.value;
         const uint32_t currentDi = m_fdiv.statusDi & 0x30u;
         m_state.status = (m_state.status & 0xFCFu) | currentDi | (currentDi << 6);
-        m_fdiv.valid = false; // GOW-Port: queueQ escribe todos los campos
+        m_fdiv.valid = false; // queueQ writes every field
     }
 
     for (ScalarPipelineEntry &entry : m_efu)
@@ -924,12 +924,12 @@ void VU1Interpreter::commitReadyPipelines()
         if (entry.valid && entry.readyCycle <= m_cycle)
         {
             m_state.p = entry.value;
-            entry.valid = false; // GOW-Port: queueP escribe todos los campos
+            entry.valid = false; // queueP writes every field
         }
     }
 
     if (m_storePending != 0u && m_xgkick.active && m_cycle > m_xgkickCycle + 1u)
-        xgkickAdvanceTo(m_cycle - 1u); // GOW-Port: PATH1 copia antes de los stores que se confirman ahora
+        xgkickAdvanceTo(m_cycle - 1u); // PATH1 copies before the stores that commit now
     for (uint32_t pending = m_storePending; pending != 0u; pending &= pending - 1u)
     {
         const uint32_t index = static_cast<uint32_t>(std::countr_zero(pending));
@@ -999,7 +999,7 @@ void VU1Interpreter::commitReadyPipelines()
         write = {};
     }
 
-    uint64_t next = ~0ull; // sin la cola de flags: se confirman al leerlos (commitReadyFlags)
+    uint64_t next = ~0ull; // without the flag queue: they commit when read (commitReadyFlags)
     for (uint32_t pending = m_storePending; pending != 0u; pending &= pending - 1u)
         next = std::min(next, m_storePipeline[std::countr_zero(pending)].readyCycle);
     for (uint32_t pending = m_vfPending; pending != 0u; pending &= pending - 1u)
@@ -1018,12 +1018,12 @@ void VU1Interpreter::commitReadyPipelines()
 
 namespace
 {
-    // GOW-Port: progressXgkick corre en cada ciclo de un XGKICK; leer GOW_VIF_DIAG una vez fuera de la
-    // función evita la comprobación de inicialización de un static local en cada llamada.
-    const bool g_xgkickTrace = std::getenv("GOW_VIF_DIAG") != nullptr;
+    // progressXgkick runs on every XGKICK cycle; reading PS2X_VIF_DIAG once outside the function avoids the static
+    // local's initialization check on every call.
+    const bool g_xgkickTrace = std::getenv("PS2X_VIF_DIAG") != nullptr;
 }
 
-// Un ciclo de PATH1 (como antes, en cada ciclo): suma un crédito y copia los qwords que alcancen.
+// One PATH1 cycle (as before, every cycle): adds one credit and copies the qwords it covers.
 void VU1Interpreter::progressXgkick()
 {
     if (!m_xgkick.active || !m_activeVuData || m_activeVuDataSize == 0u)
@@ -1032,10 +1032,10 @@ void VU1Interpreter::progressXgkick()
     xgkickCopy();
 }
 
-// GOW-Port: cuenta los ciclos de PATH1 hasta 'cycle' de una vez. La copia solo depende del número de ciclos y de
-// la memoria de datos, así que es igual que avanzar ciclo a ciclo siempre que se llame antes de que la VU escriba
-// en su memoria, antes de mirar si hay un envío activo y en cada evento (GIFtag o final, que pueden fallar o
-// enviar el paquete): en esos ciclos ocurre lo mismo que antes.
+// Counts PATH1 cycles up to 'cycle' at once. The copy only depends on the number of cycles and on data memory, so
+// it is the same as advancing cycle by cycle as long as it is called before the VU writes its memory, before checking
+// whether a submission is active, and at every event (GIFtag or end, which can fail or send the packet): in those
+// cycles the same happens as before.
 void VU1Interpreter::xgkickAdvanceTo(uint64_t cycle)
 {
     if (!m_xgkick.active || !m_activeVuData || m_activeVuDataSize == 0u)
@@ -1053,9 +1053,9 @@ void VU1Interpreter::xgkickAdvanceTo(uint64_t cycle)
     xgkickScheduleEvent();
 }
 
-// Próximo ciclo en que PATH1 copia una GIFtag (currentTagEnd == 0) o el último qword de la etiqueta actual
-// (después termina el paquete o la siguiente copia es una GIFtag). La copia j-ésima ocurre cuando el crédito
-// llega a 2: ciclo m_xgkickCycle + 2 * (j - copiados + 1) - crédito.
+// Next cycle in which PATH1 copies a GIFtag (currentTagEnd == 0) or the last qword of the current tag (then the
+// packet ends or the next copy is a GIFtag). The j-th copy happens when the credit reaches 2:
+// cycle m_xgkickCycle + 2 * (j - copied + 1) - credit.
 void VU1Interpreter::xgkickScheduleEvent()
 {
     if (!m_xgkick.active)
@@ -1083,16 +1083,16 @@ void VU1Interpreter::xgkickCopy()
         uint64_t lo = 0u, hi = 0u;
         std::memcpy(&lo, m_xgkick.packet.data() + offset, 8u);
         std::memcpy(&hi, m_xgkick.packet.data() + offset + 8u, 8u);
-        std::fprintf(stderr, "[gow-xgkick:reject] reason=%s pc=0x%X source=0x%X offset=0x%X lo=%016llX hi=%016llX\n",
+        std::fprintf(stderr, "[xgkick:reject] reason=%s pc=0x%X source=0x%X offset=0x%X lo=%016llX hi=%016llX\n",
                      reason, m_state.pc, m_xgkick.sourceAddress, offset,
                      static_cast<unsigned long long>(lo), static_cast<unsigned long long>(hi));
     };
 
     while (m_xgkick.active && m_xgkick.cycleCredit >= 2u)
     {
-        // GOW-Port: dentro de la carga útil de una GIFtag no hay nada que interpretar: los qwords que alcance el
-        // crédito, menos el último de la etiqueta (que cierra la etiqueta o el paquete en el bucle normal), se
-        // copian de una vez. currentTagEnd <= kBufferSize (se comprobó al leer la etiqueta).
+        // Inside a GIFtag's payload there is nothing to interpret: the qwords the credit covers, except the tag's last one
+        // (which closes the tag or the packet in the normal loop), are copied at once. currentTagEnd <= kBufferSize
+        // (checked when the tag was read).
         if (m_xgkick.currentTagEnd != 0u && m_xgkick.currentTagEnd > m_xgkick.copiedBytes + 16u)
         {
             const uint32_t run = std::min<uint32_t>(m_xgkick.cycleCredit / 2u,
@@ -1129,7 +1129,7 @@ void VU1Interpreter::xgkickCopy()
         const uint32_t first = (m_activeVuDataSize & (m_activeVuDataSize - 1u)) == 0u
                                    ? position & (m_activeVuDataSize - 1u)
                                    : position % m_activeVuDataSize;
-        if (first + 16u <= m_activeVuDataSize) // GOW-Port: un qword sin dar la vuelta, de una vez
+        if (first + 16u <= m_activeVuDataSize) // one qword, without wrapping, at once
             std::memcpy(m_xgkick.packet.data() + m_xgkick.copiedBytes, m_activeVuData + first, 16u);
         else
             for (uint32_t i = 0; i < 16u; ++i)
@@ -1156,7 +1156,7 @@ void VU1Interpreter::xgkickCopy()
                 {
                     uint64_t tagHi = 0u;
                     std::memcpy(&tagHi, m_xgkick.packet.data() + qwordOffset + 8u, sizeof(tagHi));
-                    std::fprintf(stderr, "[gow-xgkick] tag=%u pc=0x%X source=0x%X offset=0x%X lo=%016llX hi=%016llX\n",
+                    std::fprintf(stderr, "[xgkick] tag=%u pc=0x%X source=0x%X offset=0x%X lo=%016llX hi=%016llX\n",
                                  tags, m_state.pc, m_xgkick.sourceAddress, qwordOffset,
                                  static_cast<unsigned long long>(tagLo), static_cast<unsigned long long>(tagHi));
                 }
@@ -1167,7 +1167,7 @@ void VU1Interpreter::xgkickCopy()
                 tagBytes += static_cast<uint64_t>(nloop) * nreg * 16u;
             else if (format == 1u)
                 tagBytes += ((static_cast<uint64_t>(nloop) * nreg + 1u) & ~1ull) * 8u;
-            else // GOW-Port: IMAGE (2) y FLG=3, que el GS trata igual que IMAGE (el frontend ya lo hace)
+            else // IMAGE (2) and FLG=3, which the GS treats as IMAGE (the frontend already does)
                 tagBytes += static_cast<uint64_t>(nloop) * 16u;
 
             if (tagBytes > XgkickPipeline::kBufferSize - qwordOffset)
@@ -1220,7 +1220,7 @@ void VU1Interpreter::startXgkick(uint32_t qwordAddress)
     m_xgkick.sourceAddress = sourceAddress;
     m_xgkick.cycleCredit = 1u; // XGKICK's issue cycle counts toward PATH1.
     m_xgkick.issueCycle = m_cycle;
-    m_xgkickCycle = m_cycle; // GOW-Port: PATH1 por eventos
+    m_xgkickCycle = m_cycle; // PATH1 by events
     // Opt-in packet snapshot, following Scotho/socom-unzipped's XGKICK workaround.
     // Capture before later VU instructions re-template the source buffer. Keep
     // the existing bounded parser and circular-memory handling in both modes.
@@ -1241,15 +1241,15 @@ void VU1Interpreter::advanceOneCycle()
     if (m_cycle >= m_nextCommitCycle)
         commitReadyPipelines();
     if (m_xgkick.active)
-        xgkickAdvanceTo(m_cycle); // GOW-Port: un ciclo, o los que falten tras código compilado
+        xgkickAdvanceTo(m_cycle); // one cycle, or the ones left after compiled code
 }
 
 void VU1Interpreter::advanceTo(uint64_t targetCycle)
 {
-    // GOW-Port: en una espera no se ejecuta nada; solo cuentan los ciclos en que algo cambia: un resultado listo
-    // (m_nextCommitCycle) o un evento de PATH1 (GIFtag o fin del paquete, el único momento en que deja de estar
-    // activo). Se salta de uno a otro con el mismo orden que ciclo a ciclo (primero el commit y después PATH1);
-    // entre eventos PATH1 solo acumula crédito, que xgkickAdvanceTo cuenta de una vez.
+    // Nothing executes during a wait; only cycles where something changes count: a result becoming ready
+    // (m_nextCommitCycle) or a PATH1 event (GIFtag or end of packet, the only time it stops being active). It jumps
+    // from one to the next in the same order as cycle by cycle (commit first, then PATH1); between events PATH1 only
+    // accumulates credit, which xgkickAdvanceTo counts at once.
     while (m_cycle < targetCycle)
     {
         uint64_t next = std::min(targetCycle, std::max(m_nextCommitCycle, m_cycle + 1u));
@@ -1291,14 +1291,13 @@ bool VU1Interpreter::pipelinesPending() const
 
 void VU1Interpreter::flushPipelines()
 {
-    xgkickAdvanceTo(m_cycle); // GOW-Port: PATH1 al día antes de vaciar
+    xgkickAdvanceTo(m_cycle); // PATH1 up to date before draining
     commitReadyFlags();
     while (pipelinesPending())
     {
-        // GOW-Port: al terminar un programa suele quedar solo PATH1 (XGKICK). Ciclo a ciclo, cada ciclo suma
-        // un crédito y cada dos se copia un qword, sin nada más que hacer (las demás colas están vacías y no
-        // se pueden llenar). Se hace de una vez: n iteraciones de progressXgkick con crédito inicial c0
-        // terminan en el ciclo 2n - c0, que es lo que se suma.
+        // When a program ends, usually only PATH1 (XGKICK) is left. Cycle by cycle, each cycle adds a credit and every two
+        // a qword is copied, with nothing else to do (the other queues are empty and cannot fill). It is done at once: n
+        // iterations of progressXgkick with initial credit c0 end at cycle 2n - c0, which is what is added.
         if (m_xgkick.active && m_activeVuData && m_activeVuDataSize != 0u && !m_fdiv.valid && m_flagCount == 0u &&
             (m_storePending | m_vfPending | m_viPending | m_accPending) == 0u && !m_efu[0].valid && !m_efu[1].valid)
         {
@@ -1311,14 +1310,14 @@ void VU1Interpreter::flushPipelines()
                 const uint64_t iterations = (static_cast<uint64_t>(kCredit) + 1u - m_xgkick.cycleCredit) / 2u;
                 m_cycle += 2u * iterations - startCredit;
                 m_state.cycles = m_cycle;
-                m_xgkickCycle = m_cycle; // GOW-Port: el envío ha terminado en este ciclo
+                m_xgkickCycle = m_cycle; // the submission ended in this cycle
                 m_xgkickEvent = ~0ull;
                 if (m_cycle >= m_nextCommitCycle)
                     commitReadyPipelines();
                 commitReadyFlags();
                 continue;
             }
-            m_xgkick.cycleCredit = startCredit; // no ocurre: el crédito alcanza para cualquier paquete
+            m_xgkick.cycleCredit = startCredit; // cannot happen: the credit covers any packet
         }
         advanceOneCycle();
         commitReadyFlags();
@@ -1703,8 +1702,7 @@ VU1Interpreter::InstructionUsage VU1Interpreter::decodeLowerUsage(uint32_t lower
         usage.latency = 2u;
         readVi(viS);
         break;
-    // GOW-Port: códigos EFU reales y sus latencias, contrastados con LowerOP
-    // de PCSX2 32ac6e23e4aaf8c8c5e74a6c1ed750ee7672120e.
+    // Real EFU codes and their latencies, checked against PCSX2's LowerOP at 32ac6e23e4aaf8c8c5e74a6c1ed750ee7672120e.
     case 0x70:
     case 0x71:
     case 0x72:
@@ -1816,8 +1814,8 @@ void VU1Interpreter::rebuildDecodedCodeCache(const uint8_t *vuCode, uint32_t cod
                                              const PS2Memory *memory, uint64_t generation)
 {
     const uint32_t pairCount = std::min<uint32_t>(codeSize / 8u, kMaxDecodedPairs);
-    // GOW-Port: decodificar los 2048 pares en cada cambio de microcódigo costaba ~1 % del hilo de VU1 aunque
-    // el código compilado no use la caché. Ahora cada par se decodifica la primera vez que se pide.
+    // Decoding all 2048 pairs on every microcode change cost ~1% of the VU1 thread even when the compiled code does not
+    // use the cache. Now each pair is decoded the first time it is requested.
     m_decodedValid.fill(0u);
 
     m_cachedVuCode = vuCode;
@@ -1825,9 +1823,9 @@ void VU1Interpreter::rebuildDecodedCodeCache(const uint8_t *vuCode, uint32_t cod
     m_cachedCodeSize = codeSize;
     m_cachedCodeGeneration = generation;
     m_decodedCodeCacheValid = true;
-    // FSAND (0x16), FSEQ (0x14) y FSOR (0x17) son las únicas lecturas del estado en VU1.
+    // FSAND (0x16), FSEQ (0x14) and FSOR (0x17) are VU1's only status reads.
     m_statusUnread = m_directRegisterWrites;
-    // Mismas condiciones que con los pares decodificados: bit I = bit 31 de la palabra superior.
+    // Same conditions as with the decoded pairs: bit I = bit 31 of the upper word.
     const auto lowerOp = [vuCode](uint32_t i, bool &iBit)
     {
         uint32_t lower = 0u, upper = 0u;
@@ -1941,11 +1939,11 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     m_activeGs = &gs;
     m_activeMemory = memory;
 
-    ps2_perf::Scope perf(ps2_perf::Bucket::Vu); // GOW-Port: VU0/VU1; las llamadas al GS se descuentan.
+    ps2_perf::Scope perf(ps2_perf::Bucket::Vu); // VU0/VU1; GS calls are subtracted.
     const int previousRoundingMode = std::fegetround();
     const bool useVuRounding = std::fesetround(FE_TOWARDZERO) == 0;
     StepContext context{vuCode, codeSize, vuData, dataSize, &gs, memory, m_cycle + maxCycles, false};
-    m_lastRunHitBudget = false; // GOW-Port: funciona también con un despachador compilado.
+    m_lastRunHitBudget = false; // also works with a compiled dispatcher.
     if (CompiledProgramFn program = compiledProgramFor(vuCode, codeSize, memory))
         program(*this, context);
     else
@@ -1962,9 +1960,9 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         m_pendingHaltD = false;
         m_pendingHaltT = false;
     }
-    m_lastRunHitBudget = !programEnded && !m_stopRequested && m_cycle >= context.budgetEnd; // GOW-Port
-    xgkickAdvanceTo(m_cycle); // GOW-Port: PATH1 al día tras la ejecución (si se cortó por presupuesto)
-    commitReadyFlags(); // GOW-Port: el estado visible tras la ejecución
+    m_lastRunHitBudget = !programEnded && !m_stopRequested && m_cycle >= context.budgetEnd;
+    xgkickAdvanceTo(m_cycle); // PATH1 up to date after execution (if it was cut short by the budget)
+    commitReadyFlags(); // the visible state after execution
     m_state.cycles = m_cycle;
     if (useVuRounding && previousRoundingMode != -1)
         std::fesetround(previousRoundingMode);
@@ -2013,11 +2011,11 @@ VU1Interpreter::CompiledProgramFn VU1Interpreter::compiledProgramFor(uint8_t *vu
     if (generation != m_compiledGeneration)
     {
         m_compiledGeneration = generation;
-        // Mantener al día la caché de decodificación (y m_statusUnread) aunque se use el código compilado.
+        // Keep the decode cache (and m_statusUnread) up to date even when the compiled code is used.
         (void)getDecodedInstructionPairForPc(vuCode, codeSize, memory, 0u);
-        // GOW_VU1_CAPTURA=<carpeta>: guarda cada micromemoria distinta (entrada de generar_vu1). Son datos del
-        // juego: no se publican.
-        static const char *captureDir = std::getenv("GOW_VU1_CAPTURA");
+        // PS2X_VU1_CAPTURE=<folder>: saves every distinct micromemory (input for generar_vu1). It is game data: never
+        // publish it.
+        static const char *captureDir = std::getenv("PS2X_VU1_CAPTURE");
         if (captureDir != nullptr)
         {
             char name[64];
@@ -2037,7 +2035,7 @@ VU1Interpreter::CompiledProgramFn VU1Interpreter::compiledProgramFor(uint8_t *vu
     return m_compiledEnabled ? g_compiledProgram.load(std::memory_order_acquire) : nullptr;
 }
 
-// GOW-Port: volver a leer las variables de entorno de VU1 (las pruebas cambian GOW_XGKICK_IMMEDIATE).
+// re-read the VU1 environment variables (tests change PS2X_XGKICK_IMMEDIATE).
 void ps2Vu1ReloadEnvironmentOptions()
 {
     g_xgkickImmediate.store(-1, std::memory_order_relaxed);

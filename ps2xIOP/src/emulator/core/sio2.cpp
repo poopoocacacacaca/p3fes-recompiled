@@ -64,11 +64,11 @@ namespace ps2x::iop::detail
             return;
         if (!m_fileExists)
         {
-            // Primera escritura: se crea el archivo con la imagen entera
+            // First write: the file is created with the whole image
             std::ofstream file(m_path, std::ios::binary | std::ios::trunc);
             if (!file)
             {
-                std::cerr << "[SIO2] no se puede crear la memory card " << m_path << std::endl;
+                std::cerr << "[SIO2] cannot create the memory card " << m_path << std::endl;
                 return;
             }
             file.write(reinterpret_cast<const char *>(m_image.data()), static_cast<std::streamsize>(m_image.size()));
@@ -126,7 +126,7 @@ namespace ps2x::iop::detail
 
     Sio2::Sio2()
     {
-        const char *diag = std::getenv("GOW_SIO2_DIAG");
+        const char *diag = std::getenv("PS2X_SIO2_DIAG");
         m_diag = diag != nullptr && diag[0] != '0';
         reset();
     }
@@ -175,7 +175,7 @@ namespace ps2x::iop::detail
         if (path.empty())
             return;
         m_cards[port].insert(path);
-        std::cerr << "[SIO2] memory card del puerto " << (port + 1u) << ": " << path << std::endl;
+        std::cerr << "[SIO2] memory card in slot " << (port + 1u) << ": " << path << std::endl;
     }
 
     uint32_t Sio2::read32(uint32_t physical)
@@ -216,7 +216,7 @@ namespace ps2x::iop::detail
             m_cmdQueue[offset >> 2u] = value;
             if (offset == 0u)
             {
-                softReset(); // una cola nueva: lo que quedara sin leer de la anterior se descarta
+                softReset(); // a new queue: whatever was left unread from the previous one is dropped
                 m_out.clear();
             }
             return;
@@ -234,7 +234,7 @@ namespace ps2x::iop::detail
         case RegCtrl:
             if ((value & kCtrlStart) != 0u)
             {
-                // Los comandos ya se procesaron al recibir sus bytes: la transferencia termina en el acto.
+                // Commands were processed as their bytes arrived: the transfer finishes at once.
                 m_istat |= 1u;
                 m_transferStarted = true;
             }
@@ -328,7 +328,7 @@ namespace ps2x::iop::detail
             absentDevice(false);
             break;
         }
-        // La respuesta ocupa lo mismo que el comando (y con DMA, bloques enteros)
+        // The reply is as long as the command (and, with DMA, whole blocks)
         const size_t produced = m_out.size() - outStart;
         const size_t expected = m_dmaBlockSize != 0u ? ((produced + m_dmaBlockSize - 1u) / m_dmaBlockSize) * m_dmaBlockSize
                                                      : m_commandLength;
@@ -338,7 +338,7 @@ namespace ps2x::iop::detail
 
     void Sio2::absentDevice(bool memcard)
     {
-        // Nadie responde: todo 0xFF y el bit de "falta el dispositivo" del puerto
+        // Nobody answers: all 0xFF and the port's "device missing" bit
         if (memcard)
             m_cmdStat = StatDisconnected;
         else
@@ -370,7 +370,7 @@ namespace ps2x::iop::detail
             std::cerr << "[SIO2] mc" << m_port << " cmd=0x" << std::hex << static_cast<int>(command) << std::dec
                       << " len=" << m_commandLength << std::endl;
 
-        // Las dos primeras posiciones corresponden a 0x81 y al comando. El relleno se mide desde aqui.
+        // The first two positions are 0x81 and the command. Padding is counted from here.
         const size_t base = m_out.size();
         m_out.push_back(0x00u);
         m_out.push_back(0x00u);
@@ -386,10 +386,10 @@ namespace ps2x::iop::detail
         {
         case 0x11u: // sondeo
         case 0x12u: // fin de escritura/borrado
-        case 0x81u: // fin de lectura/escritura
+        case 0x81u: // end of read/write
             terminator(4u);
             break;
-        case 0x21u: // fijar pagina de borrado, escritura o lectura
+        case 0x21u: // set the erase, write or read page
         case 0x22u:
         case 0x23u:
         {
@@ -401,7 +401,7 @@ namespace ps2x::iop::detail
             terminator(9u);
             break;
         }
-        case 0x26u: // especificaciones: 512 bytes por pagina, 16 paginas por bloque, 0x4000 paginas
+        case 0x26u: // specs: 512 bytes per page, 16 pages per block, 0x4000 pages
         {
             const uint8_t specs[8] = {0x00u, 0x02u, 0x10u, 0x00u, 0x00u, 0x40u, 0x00u, 0x00u};
             uint8_t checksum = 0u;
@@ -426,7 +426,7 @@ namespace ps2x::iop::detail
             m_out.push_back(card.terminator);
             m_out.push_back(card.terminator);
             break;
-        case 0x42u: // escribir datos en la pagina actual
+        case 0x42u: // write data to the current page
         {
             const uint8_t length = popIn();
             m_out.push_back(0x00u);
@@ -444,7 +444,7 @@ namespace ps2x::iop::detail
             m_out.push_back(card.terminator);
             break;
         }
-        case 0x43u: // leer datos de la pagina actual
+        case 0x43u: // read data from the current page
         {
             const uint8_t length = popIn();
             m_out.push_back(0x00u);
@@ -461,7 +461,7 @@ namespace ps2x::iop::detail
             m_out.push_back(card.terminator);
             break;
         }
-        case 0x82u: // borrar el bloque (16 paginas) de la pagina fijada
+        case 0x82u: // erase the block (16 pages) of the set page
             card.eraseBlock();
             terminator(4u);
             break;
@@ -473,7 +473,7 @@ namespace ps2x::iop::detail
             card.terminator = 0x55u;
             terminator(5u);
             break;
-        case 0xF0u: // autenticacion MagicGate: se acepta sin cifrado (secrman va por HLE)
+        case 0xF0u: // MagicGate authentication: accepted without encryption (secrman is HLE)
         {
             const uint8_t step = popIn();
             switch (step)

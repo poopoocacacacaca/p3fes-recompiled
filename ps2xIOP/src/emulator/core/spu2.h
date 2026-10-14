@@ -1,11 +1,11 @@
 #pragma once
 
-// GOW-Port: emulacion del SPU2 (dos nucleos de 24 voces, 2 MB de RAM de sonido).
-// Fase 1: registros, RAM, transferencias manuales y DMA, voces ADPCM con tono, ADSR, volumen fijo y mezcla seca,
-// ENDX/ENVX/NAX legibles e interrupcion por IRQA. Fase 2: la mezcla sale por el audio del host (ps2_runtime.cpp).
-// Pendiente: reverb, barrido de volumen e interpolacion gaussiana.
-// P3FES: AutoDMA (ADMA) sound-data input, used by CRI ADX for streamed music and movie audio.
-// Referencias: PCSX2 (pcsx2/SPU2) y la documentacion "psx-spx" del SPU (ADPCM y ADSR son iguales que en la PS1).
+// SPU2 emulation (two cores of 24 voices, 2 MB of sound RAM): registers, RAM, manual and DMA transfers,
+// ADPCM voices with pitch, ADSR, fixed volume and dry mix, readable ENDX/ENVX/NAX and the IRQA interrupt.
+// The mix goes to the host's audio output (ps2_runtime.cpp).
+// AutoDMA (ADMA) sound-data input, used by CRI ADX for streamed music and movie audio.
+// Not yet: reverb, volume sweeps and Gaussian interpolation.
+// References: PCSX2 (pcsx2/SPU2) and psx-spx's SPU notes (ADPCM and ADSR are the same as on the PS1).
 
 #include <array>
 #include <cstddef>
@@ -25,7 +25,7 @@ namespace ps2x::iop::detail
         static constexpr uint32_t CyclesPerSample = 768u;  // 36.864 MHz / 48 kHz
         static constexpr int IopInterrupt = 9;
 
-        // Desplazamientos dentro de un nucleo (el nucleo 1 esta 0x400 mas arriba)
+        // Offsets within a core (core 1 is 0x400 higher)
         static constexpr uint32_t RegPmon = 0x180u, RegNon = 0x184u, RegVmixL = 0x188u, RegVmixEL = 0x18Cu;
         static constexpr uint32_t RegVmixR = 0x190u, RegVmixER = 0x194u, RegMmix = 0x198u, RegAttr = 0x19Au;
         static constexpr uint32_t RegIrqa = 0x19Cu, RegKon = 0x1A0u, RegKoff = 0x1A4u, RegTsa = 0x1A8u;
@@ -52,7 +52,7 @@ namespace ps2x::iop::detail
         }
         void writeRam(uint32_t halfwordAddress, uint16_t value) noexcept;
 
-        // DMA del IOP (canales 4 y 7). Copia bytes desde/hacia la RAM del IOP en la TSA del nucleo y la avanza.
+        // IOP DMA (channels 4 and 7). Copies bytes to/from IOP RAM at the core's TSA and advances it.
         // In ADMA mode (ADMAS bit of the core set) a write queues the bytes as sound-data input instead:
         // 512-byte blocks of 256 left samples followed by 256 right samples, consumed at 48 kHz.
         bool dmaWrite(uint32_t core, const uint8_t *source, size_t bytes);
@@ -64,18 +64,18 @@ namespace ps2x::iop::detail
         // hardware, which requests the next block while the other one plays); true once per completed transfer.
         [[nodiscard]] bool takeAdmaDone(uint32_t core) noexcept;
 
-        // Avanza hasta el ciclo indicado del IOP (una muestra cada CyclesPerSample ciclos).
+        // Advances to the given IOP cycle (one sample every CyclesPerSample cycles).
         void advanceTo(uint64_t iopCycle);
-        void step(); // una muestra de 48 kHz
+        void step(); // one 48 kHz sample
         [[nodiscard]] bool takeInterrupt() noexcept;
 
-        // Muestras estereo intercaladas (L, R) producidas desde la ultima llamada. Productor (IOP) y consumidor (hilo de
-        // audio del host) pueden estar en hilos distintos. Con maxLatencyFrames se descartan las mas antiguas si se ha
-        // acumulado mas retraso (la emulacion puede ir mas rapida que el tiempo real).
+        // Interleaved stereo samples (L, R) produced since the last call. Producer (IOP) and consumer (host audio
+        // thread) can be different threads. With maxLatencyFrames the oldest are dropped when more delay has built
+        // up (emulation can run faster than real time).
         [[nodiscard]] size_t pendingFrames() const;
         size_t drainOutput(int16_t *stereo, size_t maxFrames, size_t maxLatencyFrames = SIZE_MAX);
 
-        // Estado de una voz, para pruebas y diagnostico
+        // A voice's state, for tests and diagnostics
         struct VoiceState
         {
             bool active = false;
@@ -84,7 +84,7 @@ namespace ps2x::iop::detail
             bool lsaFromRegister = false;
             uint32_t pitchCounter = 0; // 4.12
             int16_t decoded[28]{};
-            uint32_t decodedIndex = 28; // 28 = hay que decodificar el siguiente bloque
+            uint32_t decodedIndex = 28; // 28 = the next block must be decoded
             int32_t hist1 = 0, hist2 = 0;
             int16_t prev[3]{};
             uint8_t blockFlags = 0;

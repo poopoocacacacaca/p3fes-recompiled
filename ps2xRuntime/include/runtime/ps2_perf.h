@@ -1,8 +1,8 @@
 #ifndef PS2_PERF_H
 #define PS2_PERF_H
 
-// GOW-Port: perfil opcional de tiempo transcurrido exclusivo, separado por hilo.
-// Los tiempos incluyen esperas del sistema; no representan muestras de uso de CPU.
+// optional exclusive elapsed-time profile, separated per thread.
+// Times include system waits; they are not CPU usage samples.
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -16,7 +16,7 @@ namespace ps2_perf
     enum class Bucket : size_t { Ee, Vu, Gs, Iop, GuestWait, Upload, HostWait, Count, None = Count };
     constexpr size_t bucketCount = static_cast<size_t>(Bucket::Count);
 
-    // Contabilidad con reloj inyectable para comprobar el anidamiento sin sleeps.
+    // Accounting with an injectable clock to check nesting without sleeps.
     struct Accounting
     {
         Bucket active = Bucket::None;
@@ -35,7 +35,7 @@ namespace ps2_perf
     inline bool enabled()
     {
         static const bool on = [] {
-            const char *value = std::getenv("GOW_PERF_DIAG");
+            const char *value = std::getenv("PS2X_PERF_DIAG");
             return value && std::strcmp(value, "1") == 0;
         }();
         return on;
@@ -43,7 +43,7 @@ namespace ps2_perf
     inline bool countFrames()
     {
         static const bool on = [] {
-            const char *value = std::getenv("GOW_PERF_DIAG");
+            const char *value = std::getenv("PS2X_PERF_DIAG");
             return value && (std::strcmp(value, "1") == 0 || std::strcmp(value, "frames") == 0);
         }();
         return on;
@@ -79,16 +79,16 @@ namespace ps2_perf
     {
         if (!countFrames()) return;
         static const uint32_t framePc = [] {
-            const char *value = std::getenv("GOW_PERF_FRAME_PC");
+            const char *value = std::getenv("PS2X_PERF_FRAME_PC");
             return value ? static_cast<uint32_t>(std::strtoul(value, nullptr, 0)) : 0u;
         }();
-        // Solo entradas a la funciÃ³n elegida: las reanudaciones no cuentan como cuadros nuevos.
+        // Only entries to the chosen function: resumptions do not count as new frames.
         if (framePc != 0u && pc == framePc) guestFlips.fetch_add(1, std::memory_order_relaxed);
     }
     inline void report()
     {
         if (!countFrames()) return;
-        // Se llama Ãºnicamente desde el hilo de presentaciÃ³n. No lee RAM del juego.
+        // Only called from the presentation thread. Does not read game RAM.
         const uint64_t now = nowNanos();
         static uint64_t first = now, last = now;
         static std::array<uint64_t, bucketCount> before{};
@@ -104,7 +104,7 @@ namespace ps2_perf
         }
         const uint64_t flips = guestFlips.load(std::memory_order_relaxed);
         const uint64_t frames = hostFrames.load(std::memory_order_relaxed);
-        std::fprintf(stderr, "[gow-perf] t=%.2f window=%.2f ee_ms=%.2f vu_ms=%.2f gs_ms=%.2f iop_ms=%.2f guest_wait_ms=%.2f upload_ms=%.2f host_wait_ms=%.2f guest_flip_hz=%.2f host_hz=%.2f\n",
+        std::fprintf(stderr, "[perf] t=%.2f window=%.2f ee_ms=%.2f vu_ms=%.2f gs_ms=%.2f iop_ms=%.2f guest_wait_ms=%.2f upload_ms=%.2f host_wait_ms=%.2f guest_flip_hz=%.2f host_hz=%.2f\n",
             (now - first) * 1e-9, seconds, ms[0], ms[1], ms[2], ms[3], ms[4], ms[5], ms[6],
             (flips - previousFlips) / seconds, (frames - previousFrames) / seconds);
         previousFlips = flips; previousFrames = frames; last = now;

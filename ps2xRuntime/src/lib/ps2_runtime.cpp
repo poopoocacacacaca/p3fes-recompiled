@@ -1,5 +1,5 @@
 #include "ps2_runtime.h"
-#include "runtime/gs/gs_host_present.h" // GOW-Port: consumidor privado del host.
+#include "runtime/gs/gs_host_present.h" // the host's private consumer.
 #include "ps2_log.h"
 #include "runtime/ps2_perf.h"
 #include "ps2_stubs.h"
@@ -36,8 +36,8 @@
 #if !defined(PLATFORM_VITA)
 namespace
 {
-    // GOW-Port: salida del SPU2 emulado por el IOP. raylib pide las muestras desde su hilo de audio; el IOP las
-    // produce en el hilo del EE (IopSubsystem::drainAudio usa un mutex). GOW_AUDIO=0 desactiva la salida.
+    // Output of the SPU2 emulated by the IOP. raylib asks for samples from its audio thread; the IOP produces them
+    // on the EE thread (IopSubsystem::drainAudio uses a mutex). PS2X_AUDIO=0 disables the output.
     std::atomic<ps2x::iop::IopSubsystem *> g_spu2AudioSource{nullptr};
     AudioStream g_spu2Stream{};
     bool g_spu2StreamActive = false;
@@ -49,11 +49,11 @@ namespace
         size_t produced = 0u;
         if (ps2x::iop::IopSubsystem *source = g_spu2AudioSource.load(std::memory_order_acquire))
             produced = source->drainAudio(out, frames, kSpu2MaxLatencyFrames);
-        // GOW-Port: GOW_AUDIO_PCM=<archivo> guarda las muestras emuladas (s16le, estéreo, 48 kHz) sin los
-        // silencios de relleno, para comprobar el audio aunque la emulación vaya más lenta que el tiempo real.
+        // PS2X_AUDIO_DUMP=<file> saves the emulated samples (s16le, stereo, 48 kHz) without the filler silence, to
+        // check the audio even when emulation runs slower than real time.
         static std::FILE *pcm = []() -> std::FILE *
         {
-            const char *path = std::getenv("GOW_AUDIO_PCM");
+            const char *path = std::getenv("PS2X_AUDIO_DUMP");
             return path ? std::fopen(path, "wb") : nullptr;
         }();
         if (pcm && produced != 0u)
@@ -61,14 +61,14 @@ namespace
             std::fwrite(out, sizeof(int16_t) * 2u, produced, pcm);
             std::fflush(pcm);
         }
-        std::fill(out + produced * 2u, out + static_cast<size_t>(frames) * 2u, int16_t{0}); // sin datos: silencio
+        std::fill(out + produced * 2u, out + static_cast<size_t>(frames) * 2u, int16_t{0}); // no data: silence
     }
 
-    // P3FES: with no audio device (headless test runs) but GOW_AUDIO_PCM set, a thread drains every emulated
+    // P3FES: with no audio device (headless test runs) but PS2X_AUDIO_DUMP set, a thread drains every emulated
     // sample into the file so the audio can still be checked.
     void startHeadlessPcmDump(ps2x::iop::IopSubsystem *source)
     {
-        const char *path = std::getenv("GOW_AUDIO_PCM");
+        const char *path = std::getenv("PS2X_AUDIO_DUMP");
         if (!path || !*path || source == nullptr)
             return;
         std::thread([source, file = std::string(path)]()
@@ -99,19 +99,19 @@ namespace
             startHeadlessPcmDump(source);
             return;
         }
-        const char *setting = std::getenv("GOW_AUDIO");
+        const char *setting = std::getenv("PS2X_AUDIO");
         if (g_spu2StreamActive || source == nullptr || !IsAudioDeviceReady() || (setting && setting[0] == '0'))
             return;
         SetAudioStreamBufferSizeDefault(1024);
         g_spu2Stream = LoadAudioStream(48000u, 16u, 2u);
-        SetAudioStreamBufferSizeDefault(0); // el resto de flujos conserva el tamano por defecto
+        SetAudioStreamBufferSizeDefault(0); // other streams keep the default size
         if (!IsAudioStreamValid(g_spu2Stream))
             return;
         g_spu2AudioSource.store(source, std::memory_order_release);
         SetAudioStreamCallback(g_spu2Stream, spu2AudioCallback);
         PlayAudioStream(g_spu2Stream);
         g_spu2StreamActive = true;
-        std::cerr << "[SPU2] salida de audio a 48 kHz activa (GOW_AUDIO=0 la desactiva)" << std::endl;
+        std::cerr << "[SPU2] 48 kHz audio output on (PS2X_AUDIO=0 turns it off)" << std::endl;
     }
 
     void stopSpu2Audio()
@@ -119,7 +119,7 @@ namespace
         if (!g_spu2StreamActive)
             return;
         StopAudioStream(g_spu2Stream);
-        UnloadAudioStream(g_spu2Stream); // raylib espera a que termine el callback en curso
+        UnloadAudioStream(g_spu2Stream); // raylib waits for the running callback to finish
         g_spu2AudioSource.store(nullptr, std::memory_order_release);
         g_spu2StreamActive = false;
     }
@@ -129,41 +129,6 @@ namespace
 namespace ps2_stubs
 {
     void resetSifState();
-}
-
-// GOW-Port: velocidad del juego = tiempo de juego / tiempo real (1 = tiempo real; < 1 = cámara lenta). En cada
-// cuadro (entrada a GOW_PERF_FRAME_PC, vid::Flip) suma el paso de tiempo del juego (float en 0x29C64C de
-// SCUS-97399). Con GOW_DELTA_DIAG=1 se imprime cada segundo. Idea tomada de Tobiichi-Port (YYOzcan).
-std::atomic<float> g_gowGameSpeed{0.0f};
-void gowCountGuestFrame(uint32_t pc, const uint8_t *rdram)
-{
-    static const uint32_t framePc = [] {
-        const char *value = std::getenv("GOW_PERF_FRAME_PC");
-        return value ? static_cast<uint32_t>(std::strtoul(value, nullptr, 0)) : 0u;
-    }();
-    if (framePc == 0u || pc != framePc || !rdram)
-        return;
-    static const bool diag = [] { const char *v = std::getenv("GOW_DELTA_DIAG"); return v && v[0] == '1'; }();
-    static auto windowStart = std::chrono::steady_clock::now();
-    static double gameSeconds = 0.0;
-    static unsigned frames = 0;
-    float delta = 0.0f;
-    std::memcpy(&delta, rdram + 0x29C64Cu, sizeof(delta));
-    if (delta > 0.0f && delta < 1.0f)
-        gameSeconds += delta;
-    ++frames;
-    const auto now = std::chrono::steady_clock::now();
-    const double wall = std::chrono::duration<double>(now - windowStart).count();
-    if (wall >= 1.0)
-    {
-        g_gowGameSpeed.store(static_cast<float>(gameSeconds / wall), std::memory_order_relaxed);
-        if (diag)
-            std::fprintf(stderr, "[gow-delta] frames=%u wall=%.2f game=%.3f speed=%.2f last_delta=%.4f\n",
-                         frames, wall, gameSeconds, gameSeconds / wall, delta);
-        windowStart = now;
-        gameSeconds = 0.0;
-        frames = 0;
-    }
 }
 
 #define ELF_MAGIC 0x464C457F // "\x7FELF" in little endian
@@ -242,8 +207,8 @@ namespace
     };
 
     thread_local DispatchHistory g_dispatchHistory;
-    // GOW-Port: cuenta los saltos (no llamadas) despachados, para distinguir un retorno implicito de un salto final
-    // que vuelve a la entrada de la funcion llamada (fork de SotC, c4c20e8).
+    // counts dispatched jumps (not calls), to tell an implicit return from a tail jump that goes back to the called
+    // function's entry (SotC fork, c4c20e8).
     thread_local uint64_t g_guestJumpSerial = 0u;
 
     bool computeFileCrc32(const std::string &path, uint32_t &crcOut)
@@ -518,14 +483,14 @@ PS2Runtime::PS2Runtime()
 
     m_eeScheduler = std::make_unique<EeScheduler>(*this);
 
-    // GOW-Port: VU1 sin colas de escritura (un tercio más rápido); GOW_VU1_COLAS=1 vuelve al modelo con colas.
+    // VU1 without write queues (a third faster); PS2X_VU1_WRITE_QUEUES=1 restores the queued model.
     {
-        const char *queues = std::getenv("GOW_VU1_COLAS");
+        const char *queues = std::getenv("PS2X_VU1_WRITE_QUEUES");
         m_vu1.setDirectRegisterWrites(!(queues && std::strcmp(queues, "1") == 0));
     }
-    // GOW-Port: GOW_VU1_SIN_COMPILAR=1 usa siempre el intérprete aunque haya microcódigo compilado enlazado.
+    // PS2X_VU1_INTERPRET_ONLY=1 always uses the interpreter even when compiled microcode is linked in.
     {
-        const char *noCompiled = std::getenv("GOW_VU1_SIN_COMPILAR");
+        const char *noCompiled = std::getenv("PS2X_VU1_INTERPRET_ONLY");
         m_vu1.setCompiledProgramsEnabled(!(noCompiled && std::strcmp(noCompiled, "1") == 0));
     }
 
@@ -574,9 +539,9 @@ PS2Runtime::~PS2Runtime()
     try
     {
         requestStop();
-        m_memory.syncVu1Worker(); // GOW-Port: el hilo de VU1 usa el GS, que se destruye antes que la memoria
+        m_memory.syncVu1Worker(); // the VU1 thread uses the GS, which is destroyed before the memory
 #if !defined(PLATFORM_VITA)
-        stopSpu2Audio(); // GOW-Port: antes de destruir el IOP que produce las muestras
+        stopSpu2Audio(); // before destroying the IOP that produces the samples
 #endif
         m_iopSubsystem.reset();
         m_iopHost.reset();
@@ -596,7 +561,7 @@ PS2Runtime::~PS2Runtime()
             m_debugUiInitialized = false;
         }
 
-        shutdownHostGraphics(); // GOW-Port: el host vive hasta destruir el backend GS.
+        shutdownHostGraphics(); // the host lives until the GS backend is destroyed.
 
         m_loadedModules.clear();
     }
@@ -699,19 +664,19 @@ bool PS2Runtime::isIopMemoryRange(uint32_t address, size_t size) const
     return m_iopSubsystem && m_iopSubsystem->isMemoryRange(address, size);
 }
 
-// GOW-Port: diagnóstico de PR #12 (927c7b93), adaptado a StepContext de PR #18.
-// GOW_VU1_BUDGET_DIAG=1 observa cortes por presupuesto; no aumenta el límite.
-static void gowReportVu1Budget(const VU1Interpreter &vu1, const char *kind, uint32_t startPC)
+// Diagnostic from god-of-war-recomp PR #12 (927c7b93), adapted to PR #18's StepContext.
+// PS2X_VU1_BUDGET_DIAG=1 reports budget cut-offs; it does not raise the limit.
+static void reportVu1Budget(const VU1Interpreter &vu1, const char *kind, uint32_t startPC)
 {
     static const bool enabled = [] {
-        const char *value = std::getenv("GOW_VU1_BUDGET_DIAG");
+        const char *value = std::getenv("PS2X_VU1_BUDGET_DIAG");
         return value && *value && *value != '0';
     }();
     if (!enabled || !vu1.lastRunHitBudget()) return;
     static std::atomic<uint64_t> hits{0u};
     const uint64_t count = hits.fetch_add(1u, std::memory_order_relaxed) + 1u;
     if (count <= 32u || (count % 1024u) == 0u)
-        std::fprintf(stderr, "[gow-vu1-budget] %s start=0x%04X pc=0x%04X cycles=%llu hits=%llu\n",
+        std::fprintf(stderr, "[vu1-budget] %s start=0x%04X pc=0x%04X cycles=%llu hits=%llu\n",
                      kind, startPC, vu1.state().pc, static_cast<unsigned long long>(vu1.state().cycles),
                      static_cast<unsigned long long>(count));
 }
@@ -731,18 +696,18 @@ bool PS2Runtime::syncCoreSubsystems()
     }
 
     m_gs.init(gsVram, static_cast<uint32_t>(PS2_GS_VRAM_SIZE), &m_memory.gs());
-    // GOW-Port: cada flujo conserva su cursor GIF, incluso cuando otro PATH lo interrumpe.
+    // each stream keeps its GIF cursor, even when another PATH interrupts it.
     m_gifArbiter.reset();
     m_gifArbiter.setProcessPathPacketFn([this](GifPathId path, const uint8_t *data, uint32_t size)
                                     {
-                                        // GOW-Port: desde el hilo de VU1, a su hilo del GS si está activado.
+                                        // from the VU1 thread, to its GS thread when enabled.
                                         if (!m_memory.enqueueGsFront(path, data, size))
                                             m_gs.processGIFPacket(data, size, path);
                                     });
     m_memory.setGsFrontProcess([this](GifPathId path, const uint8_t *data, uint32_t size)
                                { m_gs.processGIFPacket(data, size, path); });
     m_memory.setGifArbiter(&m_gifArbiter);
-    // GOW-Port: con VIF1/VU1 en su hilo, despertar al EE cuando termina cada envío (Dmac no hace nada más).
+    // with VIF1/VU1 on their thread, wake the EE when each submission ends (the DMAC does nothing else).
     m_memory.setVu1WorkerNotify([this]
                                   {
                                       if (m_eeScheduler)
@@ -750,7 +715,7 @@ bool PS2Runtime::syncCoreSubsystems()
                                   });
     m_memory.setVu1MscalCallback([this](uint32_t startPC, uint32_t top, uint32_t itop)
                                  {
-                                     // GOW-Port: desde el hilo de VU1 no se consulta el planificador del EE.
+                                     // the EE scheduler is not queried from the VU1 thread.
                                      R5900Context *cpuContext = m_eeScheduler && !m_memory.onVu1WorkerThread()
                                                                     ? m_eeScheduler->currentContext()
                                                                     : nullptr;
@@ -765,14 +730,14 @@ bool PS2Runtime::syncCoreSubsystems()
                                      m_vu1.execute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                    m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
                                                    m_gs, &m_memory, startPC, top, itop, 65536);
-                                     gowReportVu1Budget(m_vu1, "MSCAL", startPC);
+                                     reportVu1Budget(m_vu1, "MSCAL", startPC);
                                      cpuContext->vu0_vpu_stat =
                                          (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                          (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
                                          (m_vu1.state().stoppedByT ? 0x0400u : 0u); });
     m_memory.setVu1MscntCallback([this](uint32_t top, uint32_t itop)
                                  {
-                                     // GOW-Port: desde el hilo de VU1 no se consulta el planificador del EE.
+                                     // the EE scheduler is not queried from the VU1 thread.
                                      R5900Context *cpuContext = m_eeScheduler && !m_memory.onVu1WorkerThread()
                                                                     ? m_eeScheduler->currentContext()
                                                                     : nullptr;
@@ -787,7 +752,7 @@ bool PS2Runtime::syncCoreSubsystems()
                                      m_vu1.resume(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                   m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
                                                   m_gs, &m_memory, top, itop, 65536);
-                                     gowReportVu1Budget(m_vu1, "MSCNT", 0xFFFFu);
+                                     reportVu1Budget(m_vu1, "MSCNT", 0xFFFFu);
                                      cpuContext->vu0_vpu_stat =
                                          (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                          (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
@@ -823,7 +788,7 @@ bool PS2Runtime::initialize(const char *title)
             std::cerr << "Failed to create the runtime host window" << std::endl;
             return false;
         }
-        // GOW-Port: el backend GPU solo puede compartir si el host ya existe.
+        // the GPU backend can only share if the host already exists.
         m_hostPresentation->captureHostContext();
         if (!syncCoreSubsystems())
         {
@@ -835,7 +800,7 @@ bool PS2Runtime::initialize(const char *title)
 #if !defined(PLATFORM_VITA)
         InitAudioDevice();
         m_audioBackend.setAudioReady(IsAudioDeviceReady());
-        startSpu2Audio(m_iopSubsystem.get()); // GOW-Port
+        startSpu2Audio(m_iopSubsystem.get());
 #endif
         SetTargetFPS(60);
         // Escape is mapped to the pad's Circle button; don't let raylib treat it
@@ -858,7 +823,7 @@ bool PS2Runtime::initialize(const char *title)
         std::cerr << "Failed to initialize PS2 runtime: unknown exception" << std::endl;
     }
 
-    shutdownHostGraphics(); // GOW-Port: cubrir también errores después de capturar WGL.
+    shutdownHostGraphics(); // also cover errors after capturing WGL.
     return false;
 }
 
@@ -1492,15 +1457,15 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
     }
 }
 
-// GOW-Port branch trace ring
-struct GowBranchRec { uint32_t src, dst, ra, kind; };
-GowBranchRec g_gowRing[256]; std::atomic<uint32_t> g_gowRingPos{0};
-void gowDumpBranchRing(const char *why)
+// branch trace ring
+struct BranchRecord { uint32_t src, dst, ra, kind; };
+BranchRecord g_branchRing[256]; std::atomic<uint32_t> g_branchRingPos{0};
+void dumpBranchRing(const char *why)
 {
-    uint32_t pos = g_gowRingPos.load();
-    std::fprintf(stderr, "[gow-trace] %s, last branches (oldest first):\n", why);
+    uint32_t pos = g_branchRingPos.load();
+    std::fprintf(stderr, "[branch-trace] %s, last branches (oldest first):\n", why);
     for (uint32_t i = 0; i < 256; ++i) {
-        const GowBranchRec &r = g_gowRing[(pos + i) & 255u];
+        const BranchRecord &r = g_branchRing[(pos + i) & 255u];
         if (r.src == 0 && r.dst == 0) continue;
         std::fprintf(stderr, "  src=%08x dst=%08x ra=%08x kind=%u\n", r.src, r.dst, r.ra, r.kind);
     }
@@ -1513,7 +1478,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                      GuestBranchKind kind,
                                      const char *debugName)
 {
-    { uint32_t k = g_gowRingPos.fetch_add(1) & 255u; g_gowRing[k] = {sourcePc, targetPc, ctx ? (uint32_t)_mm_cvtsi128_si32(ctx->r[31]) : 0u, (uint32_t)kind}; }
+    { uint32_t k = g_branchRingPos.fetch_add(1) & 255u; g_branchRing[k] = {sourcePc, targetPc, ctx ? (uint32_t)_mm_cvtsi128_si32(ctx->r[31]) : 0u, (uint32_t)kind}; }
 
     ctx->pc = targetPc;
     const bool isCall = (kind == GuestBranchKind::DirectCall || kind == GuestBranchKind::IndirectCall);
@@ -1639,8 +1604,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     const uint32_t entryPc = ctx->pc;
     const uint64_t checkpointSerial = m_eeCheckpointSerial;
     const uint64_t jumpSerial = g_guestJumpSerial;
-    ps2_perf::guestEntry(targetPc); // GOW-Port: también cuenta llamadas que no vuelven al dispatcher.
-    gowCountGuestFrame(targetPc, rdram);
+    ps2_perf::guestEntry(targetPc); // also counts calls that do not return to the dispatcher.
     targetFn(rdram, ctx, this);
 
     if (isStopRequested() || ctx->pc == 0u)
@@ -1889,8 +1853,8 @@ uint32_t PS2Runtime::clampGuestHeapLimit(uint32_t guestLimit) const
 
 void PS2Runtime::resetGuestHeapLocked(uint32_t guestBase, uint32_t guestLimit)
 {
-    // GOW-Port: con setPrivateGuestHeap el heap interno del runtime vive en un rango fijo (God of War:
-    // 0x000A0000-0x000FF000, memoria libre bajo el ELF) para no pisar el heap propio del juego.
+    // With setPrivateGuestHeap the runtime's internal heap lives in a fixed range (God of War: 0x000A0000-0x000FF000,
+    // free memory below the ELF) so it does not overwrite the game's own heap.
     if (m_privateGuestHeapLimit > m_privateGuestHeapBase)
     {
         guestBase = m_privateGuestHeapBase;
@@ -2238,7 +2202,7 @@ void PS2Runtime::setPrivateGuestHeap(uint32_t base, uint32_t limit)
     std::lock_guard<std::mutex> lock(m_guestHeapMutex);
     m_privateGuestHeapBase = base;
     m_privateGuestHeapLimit = limit;
-    // Si el heap ya existe y no tiene bloques en uso, se mueve ya; si no, al siguiente SetupHeap.
+    // If the heap already exists and has no blocks in use it moves now; otherwise at the next SetupHeap.
     const bool inUse = std::any_of(m_guestHeapBlocks.begin(), m_guestHeapBlocks.end(),
                                    [](const GuestHeapBlock &block) { return !block.free; });
     if (m_guestHeapConfigured && !inUse)
@@ -2478,8 +2442,8 @@ bool PS2Runtime::isStopRequested() const
     return m_stopRequested.load(std::memory_order_relaxed);
 }
 
-// GOW-Port: actualización perezosa por ciclos EE, como COP0.cpp de PCSX2.
-// Las lecturas seguidas en un bloque avanzan al menos uno; no usar reloj de pared.
+// Lazy update from EE cycles, like PCSX2's COP0.cpp. Consecutive reads within a block advance by at least one;
+// do not use the wall clock.
 uint32_t PS2Runtime::readCop0Count(R5900Context *context) noexcept
 {
     const uint64_t cycle = m_eeScheduler->currentEeCycle();
@@ -2717,7 +2681,7 @@ void PS2Runtime::run()
                                                << " vif=" << curVif
                                                << std::endl);
 
-                // GOW-Port: estado de cada hilo del EE (cada 600 marcas, ~10 s).
+                // state of each EE thread (every 600 ticks, ~10 s).
                 if ((tick % 600) == 0)
                 {
                     for (const auto &thread : eeSnapshot.threads)
@@ -2737,7 +2701,7 @@ void PS2Runtime::run()
                 }
             }
         });
-        // GOW-Port: el helper real termina el batch antes del próximo Acquire.
+        // the real helper ends the batch before the next Acquire.
         m_hostPresentation->renderFrame(m_gs, m_eeScheduler->currentVSyncTick(), [this]
         {
             if (m_debugUiInitialized && m_debugUiDrawCallback)

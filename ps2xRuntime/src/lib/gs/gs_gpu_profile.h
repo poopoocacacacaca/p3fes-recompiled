@@ -1,6 +1,6 @@
-// GOW-Port: recolector propio de timestamps OpenGL, sin dependencias del driver.
-// Inspiración: nathanialf/ico-pc, rd_perf.c @ 46de16d393b817290e1bbf5de63a6de10cf9575c.
-// No se copia código de ICO. Las ventanas conservan contadores y muestras juntos.
+// Own collector of OpenGL timestamps, with no driver dependencies.
+// Inspired by nathanialf/ico-pc, rd_perf.c @ 46de16d393b817290e1bbf5de63a6de10cf9575c (no code copied).
+// Windows keep counters and samples together.
 #pragma once
 
 #include <array>
@@ -48,7 +48,7 @@ namespace GSGpuProfile
         std::vector<uint32_t> freeQueries;
         std::array<uint32_t, 8> nextInfo{};
 
-        // GOW-Port: bajo presión se deja de medir, sin detener el render.
+        // under pressure measuring stops, without stopping rendering.
         bool sampleAllowed()
         {
             if (pending.size() < kMaxSamplesPerWindow)
@@ -66,7 +66,7 @@ namespace GSGpuProfile
 
         size_t waitingWindows() const { return waiting.size(); }
 
-        // GOW-Port: solo el cierre permite recoger resultados todavía pendientes.
+        // only shutdown may collect results still pending.
         void finish()
         {
             if (frames != 0u || !pending.empty() || skippedQueries != 0u ||
@@ -81,8 +81,8 @@ namespace GSGpuProfile
             while (!waiting.empty())
             {
                 Window &window = waiting.front();
-                // GOW-Port: todos son TIMESTAMP del mismo contexto. OpenGL garantiza
-                // que el último disponible implica los anteriores disponibles.
+                // They are all TIMESTAMPs from the same context. OpenGL guarantees that the last one being available implies
+                // the earlier ones are.
                 if (!wait && !window.pending.empty() && !available(window.pending.back().end))
                     break;
                 for (const Pending &item : window.pending)

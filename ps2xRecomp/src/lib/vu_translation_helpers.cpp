@@ -85,8 +85,8 @@ namespace ps2recomp
         return fmt::format("{{ float ft = _mm_cvtss_f32(_mm_shuffle_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], _MM_SHUFFLE(0,0,0,{}))); ctx->vu0_q = ps2VuSqrt(ctx->vu0_status, ft); }}", ft_reg, ft_reg, ftf);
     }
 
-    // GOW-Port: VDIV/VSQRT/VRSQRT con la semantica del PS2 (sin infinitos; VRSQRT es FS/sqrt(|FT|), antes ignoraba FS).
-    // Fork de SotC, 8b51cb9.
+    // VDIV/VSQRT/VRSQRT with PS2 semantics (no infinities; VRSQRT is FS/sqrt(|FT|), it used to ignore FS).
+    // SotC fork, 8b51cb9.
     std::string CodeGenerator::translateVU_VRSQRT(const Instruction &inst)
     {
         uint8_t fsf = inst.vectorInfo.fsf;
@@ -218,7 +218,7 @@ namespace ps2recomp
             vis_reg_idx);
     }
 
-    // GOW-Port: VRNEXT/VRINIT/VRXOR/VRGET siguen el registro R del hardware (LFSR, fork de SotC, e36fbf1).
+    // VRNEXT/VRINIT/VRXOR/VRGET follow the hardware R register (LFSR, SotC fork, e36fbf1).
     std::string CodeGenerator::translateVU_VRNEXT(const Instruction &inst)
     {
         std::string code = "{ uint32_t r = static_cast<uint32_t>(_mm_cvtsi128_si32(_mm_castps_si128(ctx->vu0_r))); "
@@ -840,8 +840,8 @@ namespace ps2recomp
         }
     }
 
-    // GOW-Port: VLQI/VSQI/VLQD/VSQD/VILWR/VISWR usan la memoria de datos de VU0 ((vi & 0xFF) << 4), no la RAM del EE
-    // desde la direccion 0; VSQI/VSQD guardan Fs en la direccion de It (fork de SotC, 03d18df).
+    // VLQI/VSQI/VLQD/VSQD/VILWR/VISWR use VU0 data memory ((vi & 0xFF) << 4), not EE RAM from address 0;
+    // VSQI/VSQD store Fs at It's address (SotC fork, 03d18df).
     std::string CodeGenerator::translateVU_VLQI(const Instruction &inst)
     {
         return vu0MemoryLoad(inst.rt, inst.rd, inst.vectorInfo.vectorField, false, true);

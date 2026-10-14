@@ -1,5 +1,5 @@
-// GOW-Port: adaptado de Taylor N. Albarnaz / LightVelox (GPL-3.0).
-// Origen: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
+// Adapted from Taylor N. Albarnaz / LightVelox (GPL-3.0).
+// Source: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
 #pragma once
 
 #include <cstddef>
@@ -63,7 +63,7 @@ namespace GSGL
     constexpr GLbitfield kClientStorageBit = 0x0200;
     constexpr GLenum kTimeElapsed = 0x88BF;
     constexpr GLenum kQueryResult = 0x8866;
-    constexpr GLenum kQueryResultAvailable = 0x8867; // GOW-Port: consulta sin espera.
+    constexpr GLenum kQueryResultAvailable = 0x8867; // non-blocking query.
     constexpr GLenum kTimestamp = 0x8E28;
     constexpr GLenum kTexture2D = 0x0DE1;
     constexpr GLenum kRgba8 = 0x8058;

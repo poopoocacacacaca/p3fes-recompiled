@@ -1,4 +1,4 @@
-// GOW-Port: captura explícita y acotada de la textura adquirida; desactivada por defecto.
+// explicit, bounded capture of the acquired texture; off by default.
 #pragma once
 #include "runtime/gs/gs_shared_present.h"
 #include <cstdint>
@@ -15,8 +15,8 @@ public:
     };
     GSHostAcquiredCapture();
     explicit GSHostAcquiredCapture(Options options);
-    // GOW-Port: el llamador mantiene la reserva de Acquire y el contexto host actual.
-    // No adquiere otra ranura ni consulta el GS/VRAM; los fallos no interrumpen el juego.
+    // The caller keeps the Acquire reservation and the current host context.
+    // It does not acquire another slot or query the GS/VRAM; failures do not interrupt the game.
     bool capture(const GSSharedPresent::Frame &frame, uint64_t hostTick) noexcept;
 
 private:

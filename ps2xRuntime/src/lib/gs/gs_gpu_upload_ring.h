@@ -1,4 +1,4 @@
-// GOW-Port: uploads persistentes protegidos por fences, sin dependencia de OpenGL.
+// persistent uploads protected by fences, with no OpenGL dependency.
 #pragma once
 
 #include <array>
@@ -26,8 +26,8 @@ namespace GSGpuUpload
         bool disabled() const { return failed != Failure::None; }
         Failure failure() const { return failed; }
 
-        // GOW-Port: el callback de espera debe representar la espera acotada completa.
-        // Timeout/Failed impiden todos los uploads posteriores, incluso en otro chunk.
+        // The wait callback must represent the full bounded wait. Timeout/Failed block all later uploads, even in
+        // another chunk.
         template <class CreateFence, class WaitFence, class DeleteFence>
         size_t put(const void *data, size_t payloadBytes, CreateFence createFence,
                    WaitFence waitFence, DeleteFence deleteFence)
@@ -36,7 +36,7 @@ namespace GSGpuUpload
                 return SIZE_MAX;
             const size_t bytes = payloadBytes < 16u ? 16u : payloadBytes;
             const size_t padding = (Alignment - offset % Alignment) % Alignment;
-            size_t aligned = offset + padding; // ChunkBytes también está alineado.
+            size_t aligned = offset + padding; // ChunkBytes is aligned too.
             if (bytes > ChunkBytes - aligned)
             {
                 const Fence submitted = createFence();
@@ -53,7 +53,7 @@ namespace GSGpuUpload
                     if (result != WaitResult::Signaled)
                     {
                         failed = result == WaitResult::Timeout ? Failure::Timeout : Failure::WaitFailed;
-                        // GOW-Port: conservar ambos fences para el cierre; no copiar ni avanzar.
+                        // keep both fences for shutdown; do not copy or advance.
                         return SIZE_MAX;
                     }
                     const Fence complete = fences[next];
@@ -74,7 +74,7 @@ namespace GSGpuUpload
             return result;
         }
 
-        // GOW-Port: el propietario llama durante el cierre, antes de desmontar el contexto.
+        // the owner calls this during shutdown, before tearing down the context.
         template <class DeleteFence>
         void releaseFences(DeleteFence deleteFence)
         {

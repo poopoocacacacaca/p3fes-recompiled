@@ -43,8 +43,8 @@ namespace ps2x::iop
 
         [[nodiscard]] DebugSnapshot debugSnapshot() const;
 
-        // GOW-Port: salida del SPU2 emulado, estereo intercalado a 48 kHz. Puede llamarse desde el hilo de audio del
-        // host. Si hay mas de maxLatencyFrames acumulados, se descartan los mas antiguos.
+        // Emulated SPU2 output, interleaved stereo at 48 kHz. Can be called from the host's audio thread.
+        // If more than maxLatencyFrames are buffered, the oldest are dropped.
         size_t drainAudio(int16_t *stereo, size_t maxFrames, size_t maxLatencyFrames = SIZE_MAX);
 
     private:

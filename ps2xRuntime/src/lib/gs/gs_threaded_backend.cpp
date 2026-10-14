@@ -1,5 +1,5 @@
-// GOW-Port: adaptado de Taylor N. Albarnaz / LightVelox (GPL-3.0).
-// Origen: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
+// Adapted from Taylor N. Albarnaz / LightVelox (GPL-3.0).
+// Source: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
 #include "runtime/gs/gs_threaded_backend.h"
 #include "runtime/gs/gs_cpu_backend.h"
 #include "runtime/gs/gs_gpu_backend.h"
@@ -70,7 +70,7 @@ GSThreadedBackend::GSThreadedBackend(std::unique_ptr<GSRasterBackend> inner)
 
 GSThreadedBackend::~GSThreadedBackend()
 {
-    // GOW-Port: completar incluso el último bloque antes de cerrar el contexto GL.
+    // finish even the last block before closing the GL context.
     Drain();
     {
         std::lock_guard<std::mutex> lock(m_queueMutex);
@@ -291,10 +291,10 @@ void GSThreadedBackend::Initialize(uint8_t *vram, uint32_t vramSize)
 {
     RunOnWorker([&] {
         m_inner->Initialize(vram, vramSize);
-        // GOW-Port: un error GL debe conservar la salida CPU, no descartar los dibujos.
+        // a GL error must keep the CPU output, not drop the draws.
         if (auto *gpu = dynamic_cast<GSGpuBackend *>(m_inner.get()); gpu && !gpu->IsReady())
         {
-            std::fprintf(stderr, "[gow-gs] OpenGL no disponible; usando CPU en el hilo GS.\n");
+            std::fprintf(stderr, "[gs] OpenGL unavailable; using the CPU renderer on the GS thread.\n");
             m_inner = std::make_unique<GSCpuBackend>();
             m_inner->Initialize(vram, vramSize);
         }
@@ -330,7 +330,7 @@ void GSThreadedBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
 
 void GSThreadedBackend::Flush()
 {
-    // GOW-Port: barrera para lectura/presentación y llamadas del frontend existente.
+    // barrier for reads/presentation and calls from the existing frontend.
     RunOnWorker([&] { m_inner->Flush(); });
 }
 
@@ -339,25 +339,25 @@ void GSThreadedBackend::TextureFlush()
     Enqueue(Op::TextureFlush, nullptr, 0u);
 }
 
-// GOW-Port: GOW_GS_FINISH_ASINCRONO=1 (opcional, desactivado por defecto) encola FINISH en el hilo del GS
-// sin esperar ni glFinish: el EE ve el bit FINISH enseguida. Las lecturas de VRAM desde el EE ya sincronizan
-// por su cuenta (RunOnWorker) y el hilo del GS conserva el orden de los comandos.
-static bool gowFinishAsync()
+// PS2X_GS_FINISH_ASYNC=1 (optional, off by default) queues FINISH on the GS thread without waiting or glFinish:
+// the EE sees the FINISH bit right away. VRAM reads from the EE already synchronize on their own (RunOnWorker)
+// and the GS thread keeps the command order.
+static bool finishAsyncEnabled()
 {
-    static const bool on = [] { const char *v = std::getenv("GOW_GS_FINISH_ASINCRONO"); return v && v[0] == '1'; }();
+    static const bool on = [] { const char *v = std::getenv("PS2X_GS_FINISH_ASYNC"); return v && v[0] == '1'; }();
     return on;
 }
 
 void GSThreadedBackend::Sync(GSSyncReason reason)
 {
-    if (reason == GSSyncReason::Finish && gowFinishAsync())
+    if (reason == GSSyncReason::Finish && finishAsyncEnabled())
     {
         Enqueue(Op::Sync, &reason, sizeof(reason));
         return;
     }
     if (reason == GSSyncReason::Presentation && UsesSharedPresentation())
         return;
-    // GOW-Port: FINISH solo se publica cuando terminaron los comandos anteriores.
+    // FINISH is only published once the earlier commands are done.
     RunOnWorker([&] { m_inner->Sync(reason); });
 }
 

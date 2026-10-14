@@ -31,7 +31,7 @@ namespace ps2x::iop::detail
 
         switch (ordinal)
         {
-        case 4: // printf(fmt, ...): argumentos en a1..a3 y despues en la pila desde sp+16 (o32)
+        case 4: // printf(fmt, ...): arguments in a1..a3, then on the stack from sp+16 (o32)
         {
             uint32_t argIndex = 0u;
             const std::function<uint32_t()> nextArg = [&]() -> uint32_t

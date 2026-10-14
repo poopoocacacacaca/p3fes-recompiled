@@ -16,8 +16,8 @@ namespace ps2x::iop::detail
             return static_cast<int16_t>(std::clamp(value, -32768, 32767));
         }
 
-        // Volumen de voz o de nucleo. Modo fijo (bit 15 = 0): 15 bits con signo. El barrido (bit 15 = 1) aun no se
-        // emula: se aplica de inmediato su destino (maximo si sube, 0 si baja).
+        // Voice or core volume. Fixed mode (bit 15 = 0): signed 15 bits. Sweeps (bit 15 = 1) are not emulated yet:
+        // their target applies at once (maximum when rising, 0 when falling).
         int32_t volumeFromRegister(uint16_t value) noexcept
         {
             if ((value & 0x8000u) == 0u)
@@ -177,7 +177,7 @@ namespace ps2x::iop::detail
             const uint32_t index = (local - RegVoiceAddr) / 0xCu;
             const uint32_t field = (local - RegVoiceAddr) % 0xCu;
             VoiceState &v = m_voices[core][index];
-            if (field == 4u || field == 6u) // LSAX escrito por el driver: manda sobre la marca del bloque
+            if (field == 4u || field == 6u) // LSAX written by the driver: overrides the block's loop flag
             {
                 v.lsa = reg32(voiceAddrReg(core, index, 4u));
                 v.lsaFromRegister = true;
@@ -281,7 +281,7 @@ namespace ps2x::iop::detail
     {
         VoiceState &v = m_voices[core][index];
 
-        // Fin del bloque anterior: con la marca de fin se salta a LSA; sin "repetir", la voz se apaga.
+        // End of the previous block: with the end flag, jump to LSA; without "repeat" the voice stops.
         if ((v.blockFlags & 1u) != 0u)
         {
             m_endx[core] |= 1u << index;
@@ -411,8 +411,8 @@ namespace ps2x::iop::detail
         if (!v.active)
             return 0;
 
-        // Tono 4.12 (0x1000 = 48 kHz). Interpolacion lineal entre las dos ultimas muestras (el hardware usa una
-        // gaussiana de 4 puntos).
+        // Pitch is 4.12 (0x1000 = 48 kHz). Linear interpolation between the last two samples (the hardware uses a
+        // 4-point Gaussian).
         v.pitchCounter += std::min<uint32_t>(reg(voiceReg(core, index, 4u)), 0x3FFFu);
         while (v.pitchCounter >= 0x1000u && v.active)
         {
@@ -542,8 +542,8 @@ namespace ps2x::iop::detail
             coreOut[core][1] = right;
         }
 
-        // Salida del nucleo 0 por su volumen maestro, sumada a la seca del nucleo 1 y todo por el volumen maestro del
-        // nucleo 1 (simplificacion del enrutado MMIX).
+        // Core 0 output through its master volume, added to core 1's dry mix, all through core 1's master volume
+        // (a simplification of the MMIX routing).
         const auto master = [this](uint32_t core, uint32_t side)
         {
             return volumeFromRegister(reg(RegMvolBase + core * RegMvolStride + side * 2u));

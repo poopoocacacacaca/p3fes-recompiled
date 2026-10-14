@@ -310,9 +310,9 @@ namespace ps2x::iop::detail
                 cpu.gpr[2] = kCdvdReadyComplete;
                 return true;
 
-            case 24: // GOW-Port: sceCdReadClock(clock): reloj en BCD. mc2_d lo usa para la fecha de las partidas
-            {           // (sin él salía "??? 95, 2000"). El reloj de la PS2 va en hora de Japón (UTC+9); el juego
-                        // le resta 9 h y suma la zona horaria de la configuración (la del host).
+            case 24: // sceCdReadClock(clock): the clock in BCD. mc2_d uses it for save dates
+            {           // (without it saves showed "??? 95, 2000"). The PS2 clock runs on Japan time (UTC+9); the game
+                        // subtracts 9 h and adds the configured time zone (the host's).
                 if (a0 == 0u)
                 {
                     cpu.gpr[2] = 0u;

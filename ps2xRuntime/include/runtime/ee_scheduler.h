@@ -280,7 +280,7 @@ public:
     void postEvent(EeEvent event);
     [[nodiscard]] bool checkpointDue(uint32_t cycles = kGeneratedCheckpointCycles) noexcept;
     void accountCycles(uint32_t cycles) noexcept;
-    // GOW-Port: reloj EE del ejecutor para los registros COP0 compartidos.
+    // the executor's EE clock for the shared COP0 registers.
     [[nodiscard]] uint64_t currentEeCycle() const noexcept { return m_eeCycle; }
     [[nodiscard]] bool isExecutingGuest() const noexcept;
 
@@ -385,7 +385,7 @@ private:
     void requestPreemptionIfHigher(const GuestThread &readyThread, bool interruptSafe);
     void applyPendingPreemption();
     void processPendingEvents();
-    // GOW-Port: interrupcion INTC 0 (GS) en el flanco de subida de CSR.SIGNAL/FINISH no enmascarados en IMR.
+    // INTC interrupt 0 (GS) on the rising edge of CSR.SIGNAL/FINISH not masked in IMR.
     void pollGsInterrupt();
     void processDueDeadlines();
     void processEvent(const EeEvent &event);

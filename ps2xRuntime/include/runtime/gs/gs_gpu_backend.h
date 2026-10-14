@@ -1,5 +1,5 @@
-// GOW-Port: adaptado de Taylor N. Albarnaz / LightVelox (GPL-3.0).
-// Origen: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
+// Adapted from Taylor N. Albarnaz / LightVelox (GPL-3.0).
+// Source: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
 #pragma once
 
 #include "runtime/gs/gs_backend.h"
@@ -20,9 +20,9 @@ public:
 
     void Initialize(uint8_t *vram, uint32_t vramSize) override;
     void Reset() override;
-    // GOW-Port: comprobar la inicialización antes de elegir el backend.
+    // check initialization before choosing the backend.
     bool IsReady() const;
-    // GOW-Port: capacidad real de esta instancia, también si el driver rechaza sharing.
+    // this instance's real capability, also when the driver refuses sharing.
     bool UsesSharedPresentation() const override;
 
     void Submit(const GSPrimitiveBatch &batch) override;
@@ -62,7 +62,7 @@ public:
     void SetTexturePageCacheEnabled(bool enabled);
     void SetFastTriangleSetupEnabled(bool enabled);
     void SetHardwareRasterAllowed(bool allowed);
-    // GOW-Port: configurar antes de Initialize; diagnostico por Submit, no cache PS2.
+    // configure before Initialize; diagnostic per Submit, not a PS2 cache.
     void SetFeedbackSnapshotEnabled(bool enabled);
 
 private:

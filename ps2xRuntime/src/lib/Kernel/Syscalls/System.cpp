@@ -532,9 +532,9 @@ namespace ps2_syscalls
 
         scheduler.setupCurrentThread(initialStack, stackSize, getRegU32(ctx, 28));
 
-        // GOW-Port: reservar la pila del hilo principal para que las pilas de interrupciones (que se toman
-        // desde lo alto de la RAM) no la pisen. Sin esto, cada interrupcion machacaba los marcos mas
-        // antiguos del hilo principal y este acababa saltando a basura (God of War: pc=0xF82).
+        // Reserve the main thread's stack so the interrupt stacks (taken from the top of RAM) do not overwrite it.
+        // Without this, every interrupt clobbered the main thread's oldest frames and it ended up jumping to garbage
+        // (seen in God of War: pc=0xF82).
         if (runtime)
         {
             const uint32_t reserved = std::max<uint32_t>(stackSize, 0x10000u);
@@ -584,7 +584,7 @@ namespace ps2_syscalls
                           << std::dec << std::endl;
             });
 
-            setReturnU32(ctx, heapBase); // GOW-Port: el juego recibe su propio heap
+            setReturnU32(ctx, heapBase); // the game gets its own heap
             return;
         }
 

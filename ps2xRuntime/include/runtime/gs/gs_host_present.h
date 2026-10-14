@@ -1,9 +1,9 @@
-// GOW-Port: el mismo consumidor raylib para el juego y los controles sin ELF.
+// the same raylib consumer for the game and the ELF-less controls.
 #pragma once
 
 #include "raylib.h"
 #include "runtime/gs/gs_shared_present.h"
-#include "runtime/gs/gs_host_acquired_capture.h" // GOW-Port: captura independiente y opt-in.
+#include "runtime/gs/gs_host_acquired_capture.h" // independent, opt-in capture.
 
 #include <cstdint>
 #include <functional>
@@ -25,11 +25,11 @@ public:
         GSSharedPresent::Frame frame{};
     };
 
-    // GOW-Port: InitWindow precede a capture; Initialize del GS precede a restore.
+    // InitWindow precedes capture; the GS's Initialize precedes restore.
     void captureHostContext();
     void restoreHostContext();
     View renderFrame(GS &gs, uint64_t vsyncTick, const std::function<void()> &overlay = {});
-    // GOW-Port: unir primero el hilo del juego; mantiene el host vivo al destruir GS.
+    // join the game thread first; keeps the host alive while destroying the GS.
     void shutdown(GS &gs);
 
 private:
@@ -42,8 +42,8 @@ private:
     View current;
     uint64_t lastTick = 0u;
     uint64_t lastSharedSequence = 0u;
-    uint32_t diagnosticSharedFrames = 0u; // GOW-Port: salida opcional acotada.
-    GSHostAcquiredCapture acquiredCapture; // GOW-Port: sin opción no descarga píxeles.
+    uint32_t diagnosticSharedFrames = 0u; // optional bounded output.
+    GSHostAcquiredCapture acquiredCapture; // without the option no pixels are downloaded.
     uint32_t lastDisplayFbp = UINT32_MAX;
     uint32_t lastSourceFbp = UINT32_MAX;
     uint32_t lastWidth = 0u;

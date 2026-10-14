@@ -1,11 +1,11 @@
 #pragma once
 
-// GOW-Port: emulacion del SIO2 del IOP (0x1F808200-0x1F8082FF) y de la memory card de PS2.
-// sio2man escribe la cola de comandos (SEND3), los bytes de cada comando (FIFO o DMA 11), pone CTRL bit 0 y espera la
-// interrupcion 17; despues lee RECV1-3 y la respuesta (FIFO o DMA 12). Cada comando empieza por el modo (0x01 mando,
-// 0x21 multitap, 0x61 infrarrojos, 0x81 memory card). Los mandos y el multitap se ven desconectados (libpad2 va por HLE
-// en el EE). La memory card guarda las paginas en bruto (512 + 16 de ECC) en un archivo del formato de PCSX2 (8 MB).
-// Referencias: PCSX2 (pcsx2/SIO/Sio2.cpp, Memcard/MemoryCardProtocol.cpp) y ps2sdk (sio2man, mcman).
+// Emulation of the IOP's SIO2 (0x1F808200-0x1F8082FF) and the PS2 memory card.
+// sio2man writes the command queue (SEND3), the bytes of each command (FIFO or DMA 11), sets CTRL bit 0 and
+// waits for interrupt 17; then it reads RECV1-3 and the reply (FIFO or DMA 12). Each command starts with the
+// mode (0x01 pad, 0x21 multitap, 0x61 infrared, 0x81 memory card). Pads and multitap read as disconnected
+// (libpad is HLE on the EE). The memory card keeps raw pages (512 + 16 ECC) in a PCSX2-format file (8 MB).
+// References: PCSX2 (pcsx2/SIO/Sio2.cpp, Memcard/MemoryCardProtocol.cpp) and ps2sdk (sio2man, mcman).
 
 #include <array>
 #include <cstddef>
@@ -27,8 +27,8 @@ namespace ps2x::iop::detail
         static constexpr uint32_t PageCount = 0x4000u; // 8 MB
         static constexpr uint32_t ImageSize = RawPageSize * PageCount;
 
-        // Ruta vacia: tarjeta solo en memoria (pruebas). Si el archivo no existe, la tarjeta empieza sin formatear (0xFF)
-        // y el archivo se crea en la primera escritura.
+        // Empty path: the card lives in memory only (tests). If the file does not exist the card starts
+        // unformatted (0xFF) and the file is created on the first write.
         void insert(std::string path);
         void eject();
         [[nodiscard]] bool present() const noexcept { return m_present; }
@@ -36,8 +36,8 @@ namespace ps2x::iop::detail
 
         void setAddress(uint32_t page) noexcept { m_address = page * RawPageSize; }
         void read(uint8_t *destination, size_t size);
-        void write(const uint8_t *source, size_t size); // la flash solo pasa bits de 1 a 0 (AND)
-        void eraseBlock();                              // 16 paginas desde la direccion actual
+        void write(const uint8_t *source, size_t size); // flash only turns bits from 1 to 0 (AND)
+        void eraseBlock();                              // 16 pages from the current address
         [[nodiscard]] uint32_t address() const noexcept { return m_address; }
         [[nodiscard]] const std::vector<uint8_t> &image();
 
@@ -69,7 +69,7 @@ namespace ps2x::iop::detail
         static constexpr uint32_t RegIstat = 0x1F808280u;
         static constexpr int IopInterrupt = 17;
 
-        // RECV1: 0x1000 = respondio un dispositivo; 0xD000 con el bit del puerto = falta el dispositivo.
+        // RECV1: 0x1000 = a device answered; 0xD000 with the port's bit = device missing.
         static constexpr uint32_t StatConnected = 0x1100u;
         static constexpr uint32_t StatDisconnected = 0x1D100u;
 
@@ -89,14 +89,14 @@ namespace ps2x::iop::detail
         void dmaIn(const uint8_t *source, size_t blockBytes, size_t blocks);
         void dmaOut(uint8_t *destination, size_t bytes);
 
-        // true una vez por cada CTRL con el bit 0 (inicio de transferencia): hay que lanzar la interrupcion 17.
+        // true once per CTRL write with bit 0 (transfer start): interrupt 17 must be raised.
         [[nodiscard]] bool takeTransferStarted() noexcept;
 
         [[nodiscard]] MemoryCard &card(uint32_t port) { return m_cards[port & 1u]; }
-        // Se consulta la primera vez que se accede a cada puerto, para no tocar el disco si el juego no usa la tarjeta.
+        // Looked up the first time each port is accessed, so the disk is not touched if the game never uses the card.
         void setCardPathProvider(std::function<std::string(uint32_t port)> provider);
 
-        // Diagnostico (GOW_SIO2_DIAG): ultimo comando de memory card procesado
+        // Diagnostico (PS2X_SIO2_DIAG): ultimo comando de memory card procesado
         [[nodiscard]] uint8_t lastCardCommand() const noexcept { return m_lastCardCommand; }
 
     private:

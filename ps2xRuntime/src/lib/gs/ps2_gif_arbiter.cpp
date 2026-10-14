@@ -7,7 +7,7 @@ GifArbiter::GifArbiter(ProcessPacketFn processFn)
     setProcessPacketFn(std::move(processFn));
 }
 
-// GOW-Port: compatibilidad con clientes que no necesitan el identificador del PATH.
+// compatibility with clients that do not need the PATH identifier.
 void GifArbiter::setProcessPacketFn(ProcessPacketFn fn)
 {
     if (!fn) { m_processFn = {}; return; }
@@ -16,8 +16,8 @@ void GifArbiter::setProcessPacketFn(ProcessPacketFn fn)
 
 bool GifArbiter::trackPath3Packet(const uint8_t *data, uint32_t sizeBytes)
 {
-    // GOW-Port: recorrer solo las etiquetas; saltar registros, pixels y el padding REGLIST.
-    // El cursor sigue el FIFO PATH3 entre submit/drain sin retener sus payloads.
+    // Walk only the tags; skip registers, pixels and the REGLIST padding. The cursor follows the PATH3 FIFO between
+    // submit/drain without keeping its payloads.
     auto &input = m_path3Input;
     bool containsImage = false;
     uint32_t offset = 0u;
@@ -25,7 +25,7 @@ bool GifArbiter::trackPath3Packet(const uint8_t *data, uint32_t sizeBytes)
     {
         if (input.payloadBytes)
         {
-            containsImage |= input.format >= 2u; // GOW-Port: IMAGE e IMAGE2.
+            containsImage |= input.format >= 2u; // IMAGE and IMAGE2.
             const uint32_t bytes = std::min(input.payloadBytes, sizeBytes - offset);
             input.payloadBytes -= bytes;
             offset += bytes;
@@ -72,7 +72,7 @@ void GifArbiter::submit(GifPathId pathId, const uint8_t *data, uint32_t sizeByte
     pkt.pathId = pathId;
     pkt.path2DirectHl = (pathId == GifPathId::Path2) && path2DirectHl;
     pkt.path3Image = (pathId == GifPathId::Path3) && trackPath3Packet(data, sizeBytes);
-    // GOW-Port: reutilizar un búfer ya procesado (assign copia sin rellenar antes con ceros).
+    // reuse an already processed buffer (assign copies without zero-filling first).
     if (!m_spare.empty())
     {
         pkt.data = std::move(m_spare.back());
@@ -89,8 +89,8 @@ void GifArbiter::drain()
 
     while (!m_queue.empty())
     {
-        // GOW-Port: la excepción DIRECTHL/IMAGE no es un orden débil estricto y no puede
-        // usarse como comparador de stable_sort. Agrupar solo por path conserva sus FIFO.
+        // The DIRECTHL/IMAGE exception is not a strict weak order and cannot be used as a stable_sort comparator.
+        // Grouping only by path keeps their FIFOs.
         std::stable_sort(m_queue.begin(), m_queue.end(),
                          [](const GifArbiterPacket &a, const GifArbiterPacket &b)
                          {
@@ -113,21 +113,21 @@ void GifArbiter::drain()
         size_t path2 = path2Begin, path3 = path2End;
         while (path2 < path2End || path3 < count)
         {
-            // GOW-Port: decidir entre las cabeceras, nunca adelantar un paquete dentro del path.
-            // DIRECTHL espera a IMAGE en la cabecera PATH3; DIRECT mantiene prioridad normal.
+            // Decide between the heads, never move a packet ahead within its path. DIRECTHL waits for IMAGE at the PATH3
+            // head; DIRECT keeps normal priority.
             const bool takePath2 = path2 < path2End &&
                 (path3 == count || !m_queue[path2].path2DirectHl || !m_queue[path3].path3Image);
             auto &pkt = m_queue[takePath2 ? path2++ : path3++];
             if (!pkt.data.empty())
                 m_processFn(pkt.pathId, pkt.data.data(), static_cast<uint32_t>(pkt.data.size()));
         }
-        // GOW-Port: guardar los búferes procesados para reutilizarlos (como mucho 64).
+        // keep processed buffers for reuse (at most 64).
         for (size_t i = 0u; i < count && m_spare.size() < 64u; ++i)
         {
             m_queue[i].data.clear();
             m_spare.push_back(std::move(m_queue[i].data));
         }
-        // GOW-Port: conservar los paquetes que el callback haya añadido; se procesan en otra tanda.
+        // keep the packets the callback added; they are processed in another round.
         m_queue.erase(m_queue.begin(), m_queue.begin() + count);
     }
 }

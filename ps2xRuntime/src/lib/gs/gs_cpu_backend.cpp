@@ -27,9 +27,8 @@ using namespace GSInternal;
 
 namespace
 {
-    // GOW-Port: el GS es independiente del modo SSE que usa EE/VU al enviar.
-    // Mantener el redondeo habitual del rasterizador aproximado, también con hilo;
-    // no modificar FTZ/DAZ, máscaras ni el redondeo del código que nos llamó.
+    // The GS is independent of the SSE mode the EE/VU use when submitting. Keep the usual rounding of the
+    // approximate rasterizer, also with the thread; do not change FTZ/DAZ, masks or the caller's rounding.
     class GSCpuRoundingScope
     {
         const unsigned rounding = _mm_getcsr() & _MM_ROUND_MASK;
@@ -89,13 +88,13 @@ namespace
         switch (psm)
         {
         case GS_PSM_CT24:
-        case GS_PSM_Z24: // GOW-Port: el alias depth usa la misma expansión TEXA.
+        case GS_PSM_Z24: // the depth alias uses the same TEXA expansion.
             a = (texa.aem && rgbZero) ? 0u : texa.ta0;
             break;
         case GS_PSM_CT16:
         case GS_PSM_CT16S:
         case GS_PSM_Z16:
-        case GS_PSM_Z16S: // GOW-Port: TA0/TA1/AEM también al muestrear profundidad.
+        case GS_PSM_Z16S: // TA0/TA1/AEM also when sampling depth.
             if ((a & 0x80u) != 0u)
                 a = texa.ta1;
             else
@@ -323,7 +322,7 @@ namespace
 
     uint8_t lerpChannel(uint8_t c00, uint8_t c10, uint8_t c01, uint8_t c11, float fx, float fy)
     {
-        // GOW-Port: fracciones GS de 4 bits y truncado por etapa; oraculo PCSX2 v2.8.2 SW.
+        // 4-bit GS fractions and per-stage truncation; oracle: PCSX2 v2.8.2 SW.
         const uint32_t wx = std::min(uint32_t(fx * 16.0f), 15u);
         const uint32_t wy = std::min(uint32_t(fy * 16.0f), 15u);
         const uint32_t top = ((16u - wx) * c00 + wx * c10) >> 4;
@@ -474,9 +473,9 @@ namespace
     }
 }
 
-// GOW-Port: exportación/importación adaptada de Taylor N. Albarnaz / LightVelox,
-// PS2Recomp sotc-port ac9efa070638ad3b3accd284de6f898d5ab271d1 (GPL-3.0).
-// Mantener la caché original y los bytes CT24 pendientes añadidos por este port.
+// Export/import adapted from Taylor N. Albarnaz / LightVelox, PS2Recomp sotc-port
+// ac9efa070638ad3b3accd284de6f898d5ab271d1 (GPL-3.0). Keeps the original cache and the pending CT24 bytes
+// added by god-of-war-recomp.
 bool GSCpuBackend::ExportState(GSBackendState &out)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -501,7 +500,7 @@ bool GSCpuBackend::ImportState(const GSBackendState &state)
           m_vramSize < GSMem::TexturePageCache::kPageSize ||
           state.cachePageBase > m_vramSize - GSMem::TexturePageCache::kPageSize)))
         return false;
-    // Copiar antes de modificar el backend: una asignación fallida no lo deja a medias.
+    // Copy before modifying the backend: a failed assignment does not leave it half-done.
     auto localToHost = state.localToHost;
     m_clut = state.clut;
     m_clutCbp = state.clutCbp;
@@ -611,7 +610,7 @@ void GSCpuBackend::ResetUnlocked()
     m_transfer.direction = 3u;
     m_transferState = {};
     m_transferState.direction = 3u;
-    m_upload24 = {}; // GOW-Port: reset descarta la continuacion del pixel.
+    m_upload24 = {}; // reset drops the pixel continuation.
     m_localToHostBuffer.clear();
     m_localToHostReadPos = 0u;
 }
@@ -784,9 +783,9 @@ GSTransferSnapshot GSCpuBackend::GetTransferSnapshot() const
 
 namespace
 {
-    // GOW-Port: diagnostico del GS por variables de entorno.
-    //   PS2X_GS_DIAG=1            resumen cada 3 s de los estados de textura usados por las primitivas.
-    //   PS2X_GS_DUMP_SECONDS=a,b  volcado de la VRAM a gs_vram_<s>.bin a los a, b... segundos de la primera primitiva.
+    // GS diagnostics through environment variables.
+    //   PS2X_GS_DIAG=1            every 3 s, a summary of the texture states the primitives used.
+    //   PS2X_GS_DUMP_SECONDS=a,b  dump VRAM to gs_vram_<s>.bin a, b... seconds after the first primitive.
     struct GsDiagState
     {
         bool enabled = std::getenv("PS2X_GS_DIAG") != nullptr;
@@ -795,7 +794,7 @@ namespace
         std::chrono::steady_clock::time_point start{};
         std::chrono::steady_clock::time_point lastReport{};
         std::map<std::string, uint64_t> textureStates;
-        std::map<uint64_t, GSTex0Reg> textures; // tbp0/psm/cbp -> TEX0, para decodificar en el volcado
+        std::map<uint64_t, GSTex0Reg> textures; // tbp0/psm/cbp -> TEX0, to decode in the dump
         uint64_t prims = 0u;
         GsDiagState()
         {
@@ -858,7 +857,7 @@ void GSCpuBackend::DrawPrimitive(const GSPrimitiveBatch &batch)
                 }
                 if (now - diag.lastReport >= std::chrono::seconds(3))
                 {
-                    std::cerr << "[gs:diag] t=" << elapsed << "s prims=" << diag.prims << " estados de textura:" << std::endl;
+                    std::cerr << "[gs:diag] t=" << elapsed << "s prims=" << diag.prims << " texture states:" << std::endl;
                     for (const auto &[key, count] : diag.textureStates)
                         std::cerr << "[gs:diag]   " << count << " x " << key << std::endl;
                     diag.textureStates.clear();
@@ -872,8 +871,8 @@ void GSCpuBackend::DrawPrimitive(const GSPrimitiveBatch &batch)
                 std::ofstream file(name, std::ios::binary);
                 if (m_vram && file)
                     file.write(reinterpret_cast<const char *>(m_vram), static_cast<std::streamsize>(m_vramSize));
-                std::cerr << "[gs:diag] VRAM volcada en " << name << " (" << m_vramSize << " bytes)" << std::endl;
-                // Decodificar con las lecturas del propio runtime cada textura indexada vista.
+                std::cerr << "[gs:diag] VRAM dumped to " << name << " (" << m_vramSize << " bytes)" << std::endl;
+                // Decode every indexed texture seen with the runtime's own reads.
                 for (const auto &[texKey, tex0] : diag.textures)
                 {
                     const bool four = isFourBitIndexedPsm(tex0.psm);
@@ -1081,10 +1080,10 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
 
     if (state.prim.fge)
     {
-        const uint32_t inverseFog = 256u - fog; // GOW-Port: pesos de niebla suman 256.
+        const uint32_t inverseFog = 256u - fog; // fog weights add up to 256.
         auto applyFog = [&](uint8_t input, uint8_t fogColor) -> uint8_t
         {
-            // GOW-Port: sumar antes de truncar conserva el color cuando input == fogColor.
+            // adding before truncating keeps the color when input == fogColor.
             return static_cast<uint8_t>((static_cast<uint32_t>(fog) * input + inverseFog * fogColor) >> 8);
         };
 
@@ -1105,7 +1104,7 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
         return;
     }
 
-    // GOW-Port: ZTE=0 ignora ZTST y tampoco escribe profundidad.
+    // ZTE=0 ignores ZTST and does not write depth either.
     const bool ztestEnabled = (ctx.test & 0x10000u) != 0u;
     const uint32_t ztestMethod = ztestEnabled ? static_cast<uint32_t>((ctx.test >> 17) & 3u) : 1u;
     const bool alphaBlendEnabled = state.prim.abe;
@@ -1198,8 +1197,8 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
                 int cAlpha = (csel == 0) ? a : (csel == 1) ? da
                                                            : fix;
 
-                // GOW-Port: COLCLAMP=0 envuelve el resultado de ALPHA a ocho bits,
-                // incluidos negativos, como GSRendererSW original y el backend GLSL.
+                // COLCLAMP=0 wraps the ALPHA result to eight bits, negatives included, as PCSX2's GSRendererSW and the GLSL
+                // backend do.
                 const auto outputChannel = [&](int value) -> uint8_t {
                     return (state.colclamp & 1u) ? clampU8(value) : static_cast<uint8_t>(value);
                 };
@@ -1352,8 +1351,8 @@ uint32_t GSCpuBackend::SampleTexture(const GSDrawState &state, float s, float t,
         return ConvertTexel(state, ReadTextureVramUnlocked(tex.psm, tex.tbp0, tex.tbw, sampleU, sampleV));
     };
 
-    // GOW-Port: ambos filtros convierten STQ a 16.16 (PCSX2 v2.8.2 SW).
-    // En bilinear, truncar ANTES de restar medio texel conserva los pesos signed.
+    // both filters convert STQ to 16.16 (PCSX2 v2.8.2 SW). In bilinear, truncating BEFORE subtracting half a texel
+    // keeps the weights signed.
     const float fixedU = std::trunc(texUf * 65536.0f);
     const float fixedV = std::trunc(texVf * 65536.0f);
     if (!state.linearFilter)
@@ -1410,9 +1409,8 @@ void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
     const GSVertex &v1 = batch.vertices[1];
     const auto &ctx = state.context;
 
-    // GOW-Port: ejes firmados de sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1
-    // (Taylor N. Albarnaz / LightVelox), igual que OpenGL. El scissor solo recorta
-    // cobertura; no cambia el origen ni el sentido de interpolacion de UV/ST.
+    // Signed axes from sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1 (Taylor N. Albarnaz / LightVelox), as in
+    // OpenGL. The scissor only clips coverage; it does not change the origin or direction of UV/ST interpolation.
     const GSSpriteAxis axisX = gsSpriteAxis(v0.x, v1.x, static_cast<float>(ctx.xyoffset.ofx) / 16.0f);
     const GSSpriteAxis axisY = gsSpriteAxis(v0.y, v1.y, static_cast<float>(ctx.xyoffset.ofy) / 16.0f);
     const int unclippedX0 = axisX.first;
@@ -1548,9 +1546,8 @@ void GSCpuBackend::DrawTriangle(const GSPrimitiveBatch &batch)
     const GSVertex &v2 = batch.vertices[2];
     const auto &ctx = state.context;
 
-    // GOW-Port: mismas reglas enteras de OpenGL, adaptadas de sotc-port
-    // ac9efa070638ad3b3accd284de6f898d5ab271d1 (Taylor N. Albarnaz / LightVelox).
-    // El centro GS es (x,y), no (x+0.5,y+0.5); conservar todo XYOFFSET 12.4.
+    // The same integer rules as OpenGL, adapted from sotc-port ac9efa070638ad3b3accd284de6f898d5ab271d1
+    // (Taylor N. Albarnaz / LightVelox). The GS pixel center is (x,y), not (x+0.5,y+0.5); keep all of XYOFFSET 12.4.
     GSTriangleRaster triangle;
     if (!gsTriangleSetup(v0.x, v0.y, v1.x, v1.y, v2.x, v2.y,
                          ctx.xyoffset.ofx, ctx.xyoffset.ofy, triangle))
@@ -1576,14 +1573,14 @@ void GSCpuBackend::DrawTriangle(const GSPrimitiveBatch &batch)
                 continue;
             const float w1 = gsTriangleWeight(triangle, e[1]);
             const float w2 = gsTriangleWeight(triangle, e[2]);
-            // Conservar una Z plana de 32 bits incluso cuando los pesos se redondean.
+            // Keep a flat 32-bit Z even when the weights round.
             const double z = v0.z + (v1.z - v0.z) * w1 + (v2.z - v0.z) * w2;
 
             uint8_t r, g, b, a;
             if (state.prim.iip)
             {
-                // GOW-Port: diferencias entre vertices conservan un atributo constante
-                // incluso si los tres pesos float no suman exactamente uno (alpha 128).
+                // differences between vertices keep a constant attribute even if the three float weights do not add up to
+                // exactly one (alpha 128).
                 r = clampU8(static_cast<int>(v0.r + (v1.r - v0.r) * w1 + (v2.r - v0.r) * w2));
                 g = clampU8(static_cast<int>(v0.g + (v1.g - v0.g) * w1 + (v2.g - v0.g) * w2));
                 b = clampU8(static_cast<int>(v0.b + (v1.b - v0.b) * w1 + (v2.b - v0.b) * w2));
@@ -1603,8 +1600,7 @@ void GSCpuBackend::DrawTriangle(const GSPrimitiveBatch &batch)
                 uint16_t iu, iv;
                 if (state.prim.fst)
                 {
-                    // GOW-Port: UV 12.4 constantes no pierden un subtexel por sumar pesos.
-                    // La resta se hace con signo para admitir ejes descendentes.
+                    // constant 12.4 UVs do not lose a subtexel by adding weights. The subtraction is signed to allow descending axes.
                     iu = static_cast<uint16_t>(v0.u + (v1.u - v0.u) * w1 + (v2.u - v0.u) * w2);
                     iv = static_cast<uint16_t>(v0.v + (v1.v - v0.v) * w1 + (v2.v - v0.v) * w2);
                     is = 0.0f;
@@ -1613,8 +1609,7 @@ void GSCpuBackend::DrawTriangle(const GSPrimitiveBatch &batch)
                 }
                 else
                 {
-                    // GOW-Port: conservar S/T/Q constantes; seguir interpolando valores
-                    // homogeneos y dividir S/Q y T/Q solo al muestrear la textura.
+                    // keep S/T/Q constant; keep interpolating homogeneous values and divide S/Q and T/Q only when sampling.
                     is = v0.s + (v1.s - v0.s) * w1 + (v2.s - v0.s) * w2;
                     it = v0.t + (v1.t - v0.t) * w1 + (v2.t - v0.t) * w2;
                     iq = v0.q + (v1.q - v0.q) * w1 + (v2.q - v0.q) * w2;
@@ -1642,7 +1637,7 @@ void GSCpuBackend::DrawTriangle(const GSPrimitiveBatch &batch)
                 a = color.a;
             }
 
-            // GOW-Port: F constante conserva el mismo coeficiente que una primitiva sin DDA.
+            // a constant F keeps the same coefficient as a primitive without DDA.
             const uint8_t fog = clampU8(static_cast<int>(v0.fog + (v1.fog - v0.fog) * w1 + (v2.fog - v0.fog) * w2));
             WritePixel(state, x, y, static_cast<u32>(z + 0.5), r, g, b, a, fog);
         }
@@ -1720,7 +1715,7 @@ void GSCpuBackend::BeginTransfer(const GSTransferCommand &command)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_transfer = command;
-    m_upload24 = {}; // GOW-Port: una nueva transferencia no hereda bytes de la anterior.
+    m_upload24 = {}; // a new transfer does not inherit bytes from the previous one.
     m_transferState.x = command.trxpos.dsax;
     m_transferState.y = command.trxpos.dsay;
     m_transferState.totalPixels = static_cast<uint32_t>(command.trxreg.rrw) * static_cast<uint32_t>(command.trxreg.rrh);
@@ -1748,7 +1743,7 @@ void GSCpuBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
         UploadImageUnlocked(data, sizeBytes);
 }
 
-// GOW-Port: el wrapper conserva el pixel parcial bajo el mismo lock que la escritura.
+// the wrapper keeps the partial pixel under the same lock as the write.
 void GSCpuBackend::UploadImageUnlocked(const uint8_t *data, uint32_t sizeBytes)
 {
     if (!data || sizeBytes == 0u || !m_vram || m_transferState.direction != 0u)
@@ -2160,7 +2155,7 @@ PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationReque
         selected = displayFrame;
         pixels.clear();
         usedPreferred = false;
-        // GOW-Port: normalizar DISPFB a bloques TEX0 antes de descartar una fuente sin TBW.
+        // normalize DISPFB to TEX0 blocks before dropping a source without TBW.
         if (allowPreferred && request.hasPreferredSource && request.preferredDestFbp == displayFrame.fbp &&
             (request.preferredSource.fbw != 0u || request.preferredSource.fbp != displayFrame.fbp * 32u) &&
             CopyFrameToHostRgba(request.preferredSource, width, height, pixels, preserveAlpha, true, false, 0u, 0u))

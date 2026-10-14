@@ -1,5 +1,5 @@
-// GOW-Port: adaptado de Taylor N. Albarnaz / LightVelox (GPL-3.0).
-// Origen: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
+// Adapted from Taylor N. Albarnaz / LightVelox (GPL-3.0).
+// Source: PS2Recomp sotc-port, ac9efa070638ad3b3accd284de6f898d5ab271d1.
 #include "gs_gl.h"
 #include "runtime/gs/gs_shared_present.h"
 
@@ -274,7 +274,7 @@ namespace GSGL
         if (slot.frame.width != width || slot.frame.height != height)
         {
             gl.TexImage2D(kTexture2D, 0, kRgba8, width, height, 0, kRgba, kUnsignedByte, nullptr);
-            // GOW-Port: igualar el filtrado por defecto de la textura CPU de raylib.
+            // match the default filtering of raylib's CPU texture.
             gl.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
             gl.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
             gl.TexParameteri(kTexture2D, kTextureWrapS, kClampToEdge);
@@ -295,7 +295,7 @@ namespace GSGL
         slot.frame.usedPreferred = usedPreferred;
         slot.frame.blank = blank;
         slot.frame.vsyncTick = vsyncTick;
-        slot.frame.smode2 = smode2; // GOW-Port: conservar el modo de esta publicación.
+        slot.frame.smode2 = smode2; // keep this publication's mode.
         slot.produced = gl.FenceSync(kSyncGpuCommandsComplete, 0u);
         gl.Flush();
         return true;

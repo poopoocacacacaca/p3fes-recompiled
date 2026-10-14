@@ -26,9 +26,8 @@ namespace ps2x::iop::detail
         static constexpr uint32_t Spu2End = 0x1FA00000u;
         static constexpr uint32_t SifBase = 0x1D000000u;
         static constexpr uint32_t SifEnd = 0x1D001000u;
-        // GOW-Port: el heap empezaba en 0x120000 (832 KB hasta HeapLimit) y SMPD_IOP.IRX de God of War
-        // reserva un bloque de 0x11ADF8 bytes. En un IOP real el heap empieza tras los modulos cargados
-        // (los de GoW terminan hacia 0x56000), asi que lo bajamos a 0x70000 (1.5 MB).
+        // The heap used to start at 0x120000 (832 KB up to HeapLimit) and God of War's SMPD_IOP.IRX allocates a
+        // 0x11ADF8-byte block. On a real IOP the heap starts after the loaded modules, so it starts at 0x70000 (1.5 MB).
         static constexpr uint32_t HeapBase = 0x00070000u;
         static constexpr uint32_t HeapLimit = 0x001F0000u;
 
@@ -51,7 +50,7 @@ namespace ps2x::iop::detail
         [[nodiscard]] uint8_t read8(uint32_t address) const;
         [[nodiscard]] uint16_t read16(uint32_t address) const;
         [[nodiscard]] uint32_t read32(uint32_t address) const;
-        // GOW-Port: lectura de instrucciones en linea (el caso normal es RAM alineada); el resto va por read32.
+        // inline instruction fetch (aligned RAM is the common case); everything else goes through read32.
         [[nodiscard]] uint32_t fetch32(uint32_t address) const
         {
             const uint32_t phys = address & 0x1FFFFFFFu;
@@ -87,10 +86,10 @@ namespace ps2x::iop::detail
         void setInterruptControl(uint32_t value) noexcept { m_interruptControl = value & 1u; }
 
         [[nodiscard]] std::optional<DmaStart> takeDmaStart() noexcept;
-        [[nodiscard]] bool hasDmaStart() const noexcept { return !m_dmaStarts.empty(); } // GOW-Port
+        [[nodiscard]] bool hasDmaStart() const noexcept { return !m_dmaStarts.empty(); }
 
-        // GOW-Port: accesos del interprete con camino rapido en linea para la RAM (alineados); el resto (registros de
-        // hardware, scratchpad, SPU2, SIO2...) sigue por read*/write*, con el mismo comportamiento.
+        // Interpreter accesses with an inline fast path for aligned RAM; everything else (hardware registers,
+        // scratchpad, SPU2, SIO2...) goes through read*/write* with the same behaviour.
         [[nodiscard]] uint32_t load32(uint32_t address) const { return fetch32(address); }
         [[nodiscard]] uint16_t load16(uint32_t address) const
         {
@@ -165,9 +164,9 @@ namespace ps2x::iop::detail
         // Several DMA completions can be raised before the emulator drains them
         // (e.g. an SPU2 DMA and an SIO2 transfer), so they are queued.
         std::vector<DmaStart> m_dmaStarts;
-        Spu2 m_spu2; // GOW-Port
-        mutable Sio2 m_sio2; // GOW-Port: leer la FIFO de salida consume bytes
-        bool m_sio2Enabled = true; // GOW_SIO2=0: registros del SIO2 como simples latches (comportamiento anterior)
+        Spu2 m_spu2;
+        mutable Sio2 m_sio2; // reading the output FIFO consumes bytes
+        bool m_sio2Enabled = true; // PS2X_SIO2=0: SIO2 registers as plain latches (old behaviour)
         void startSio2Dma(uint32_t chcrAddress, uint32_t value);
     };
 }

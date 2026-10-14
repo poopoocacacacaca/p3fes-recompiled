@@ -67,13 +67,13 @@ namespace ps2x::iop::detail
         void cleanupDeadThreads();
         void terminateThreadsInRange(uint32_t base, uint32_t size);
 
-        // GOW-Port: espera fuera de un hilo (servidor RPC o callback ejecutado sin hilo actual). El emulador
-        // deja correr a los hilos listos hasta que la condicion se cumple; devuelve si se cumplio.
+        // Wait outside a thread (RPC server or callback run with no current thread). The emulator lets the ready
+        // threads run until the condition holds; returns whether it did.
         using OutsideThreadWait = std::function<bool(const std::function<bool()> &)>;
         void setOutsideThreadWait(OutsideThreadWait wait) { m_outsideThreadWait = std::move(wait); }
 
         [[nodiscard]] size_t threadCount() const noexcept { return m_threads.size(); }
-        // GOW-Port: hay algun hilo listo para ejecutar (lo usa IopRpcBridge tras cada RPC).
+        // some thread is ready to run (IopRpcBridge checks after each RPC).
         [[nodiscard]] bool hasReadyThread() const noexcept
         {
             for (const auto &[id, thread] : m_threads)
@@ -114,10 +114,10 @@ namespace ps2x::iop::detail
         uint32_t m_nextEventFlagId = 1;
         IopThread *m_currentThread = nullptr;
         OutsideThreadWait m_outsideThreadWait;
-        // GOW-Port: el EE avanza el IOP ~1,5 millones de veces por segundo de a pocos ciclos, casi siempre
-        // sin hilos listos. m_version cambia con cada operación que puede cambiar los hilos; si no cambió
-        // desde el último beginNextReady sin hilos listos, el resultado es el mismo hasta m_idleUntil (el
-        // primer despertar de un hilo en Delay) y no hace falta recorrer m_threads.
+        // The EE advances the IOP ~1.5 million times per second by a few cycles, almost always with no ready
+        // thread. m_version changes with every operation that can change the threads; if it has not changed since
+        // the last beginNextReady that found none, the result stays the same until m_idleUntil (the first wake-up
+        // of a delayed thread) and m_threads need not be scanned.
         uint64_t m_version = 1;
         uint64_t m_idleVersion = 0;
         uint64_t m_idleUntil = 0;

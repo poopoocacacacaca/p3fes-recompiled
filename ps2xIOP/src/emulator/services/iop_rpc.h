@@ -38,8 +38,8 @@ namespace ps2x::iop::detail
         {
             return executeGuestFunction(address, a0, a1, a2, a3, gp);
         }
-        // GOW-Port: deja correr a los hilos del IOP que esten listos (p. ej. despertados por un servidor RPC),
-        // como haria la expulsion por prioridad del IOP real antes de que el hilo RPC conteste.
+        // Lets the ready IOP threads run (e.g. ones woken by an RPC server), as the real IOP's priority
+        // preemption would before the RPC thread replies.
         virtual void runReadyThreads(uint64_t maxCycles)
         {
             (void)maxCycles;
@@ -59,7 +59,7 @@ namespace ps2x::iop::detail
         void removeServersInRange(uint32_t base, uint32_t size);
 
         [[nodiscard]] bool hasServer(uint32_t sid) const noexcept;
-        // GOW-Port: callback de fin de sceSifSetDmaIntr (sifman 32) pendiente de programar.
+        // end callback of sceSifSetDmaIntr (sifman 32) waiting to be scheduled.
         struct DmaCompletionCallback
         {
             uint32_t function = 0;

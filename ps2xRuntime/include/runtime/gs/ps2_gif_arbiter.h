@@ -25,7 +25,7 @@ class GifArbiter
 {
 public:
     using ProcessPacketFn = std::function<void(const uint8_t *, uint32_t)>;
-    // GOW-Port: identificar el flujo sin romper los callbacks existentes de dos argumentos.
+    // identify the stream without breaking the existing two-argument callbacks.
     using ProcessPathPacketFn = std::function<void(GifPathId, const uint8_t *, uint32_t)>;
 
     GifArbiter() = default;
@@ -43,10 +43,10 @@ public:
 private:
     ProcessPathPacketFn m_processFn;
     std::vector<GifArbiterPacket> m_queue;
-    // GOW-Port: búferes de paquetes ya procesados, para no reservar memoria en cada paquete (XGKICK, DMA).
+    // buffers for already processed packets, so no memory is allocated per packet (XGKICK, DMA).
     std::vector<std::vector<uint8_t>> m_spare;
 
-    // GOW-Port: el primer quadword de un bloque DMA puede ser payload, no una GIFtag.
+    // the first quadword of a DMA block can be payload, not a GIFtag.
     struct Path3InputState
     {
         std::array<uint8_t, 16> tag{};

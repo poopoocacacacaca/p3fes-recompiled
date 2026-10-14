@@ -125,7 +125,7 @@ namespace ps2x::iop::detail
         case 18: // prnt
             setV0(0);
             return true;
-        case 19: // sprintf(buf, fmt, ...): argumentos en a2, a3 y despues en la pila desde sp+16 (o32)
+        case 19: // sprintf(buf, fmt, ...): arguments in a2, a3, then on the stack from sp+16 (o32)
         case 42: // vsprintf(buf, fmt, va_list)
         {
             uint32_t argIndex = 0u;

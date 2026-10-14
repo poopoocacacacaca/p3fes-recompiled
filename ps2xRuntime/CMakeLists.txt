@@ -383,10 +383,10 @@ add_library(ps2_runtime STATIC
     src/lib/ps2_audio_vag.cpp
     src/lib/gs/ps2_gs_memory.cpp
     src/lib/gs/gs_frontend.cpp
-    src/lib/gs/gs_host_present.cpp # GOW-Port: mismo consumidor de textura en juego y controles.
-    src/lib/gs/gs_host_acquired_capture.cpp # GOW-Port: descarga opcional y acotada de Acquire.
+    src/lib/gs/gs_host_present.cpp # same texture consumer for the game and the controls.
+    src/lib/gs/gs_host_acquired_capture.cpp # optional, bounded download of Acquire.
     src/lib/gs/gs_cpu_backend.cpp
-    # GOW-Port: backend OpenGL y cola del fork SotC ac9efa0 (GPL-3.0).
+    # OpenGL GS backend and command queue from the SotC fork ac9efa0 (GPL-3.0).
     src/lib/gs/gs_threaded_backend.cpp
     src/lib/gs/gs_swizzle.cpp
     src/lib/gs/gpu/gs_gl.cpp
@@ -532,7 +532,7 @@ target_include_directories(ps2_runtime PUBLIC
 
 target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ffmpeg ps2_iop)
 if(WIN32)
-    # GOW-Port: WGL propio del hilo GS.
+    # The GS thread's own WGL context.
     target_link_libraries(ps2_runtime PRIVATE opengl32 gdi32)
 endif()
 target_link_libraries(ps2EntryRunner
@@ -540,12 +540,12 @@ target_link_libraries(ps2EntryRunner
     ps2_runtime
 )
 
-# GOW-Port: microcódigo de VU1 compilado. PS2X_VU1_MICROCODE_DIR es una carpeta local con micromemorias de
-# 16 KB capturadas con GOW_VU1_CAPTURA; PS2X_VU1_GENERATOR_SOURCE es tools/vu1/generar_vu1.cpp. El C++
-# generado se enlaza en el ejecutable y el despachador lo usa en lugar del intérprete para los pares que
-# coinciden. Son datos del juego: se generan en la carpeta de compilación y no se publican.
-set(PS2X_VU1_MICROCODE_DIR "" CACHE PATH "Micromemorias de VU1 capturadas (vacío: solo intérprete)")
-set(PS2X_VU1_GENERATOR_SOURCE "" CACHE FILEPATH "Generador de C++ para VU1 (tools/vu1/generar_vu1.cpp)")
+# Compiled VU1 microcode (optional). PS2X_VU1_MICROCODE_DIR is a local folder of 16 KB micromemory images
+# captured with PS2X_VU1_CAPTURE; PS2X_VU1_GENERATOR_SOURCE is the generator (god-of-war-recomp's
+# tools/vu1/generar_vu1.cpp). The generated C++ is linked into the executable and the dispatcher uses it
+# instead of the interpreter for matching pairs. It is game data: generated in the build folder, never published.
+set(PS2X_VU1_MICROCODE_DIR "" CACHE PATH "Captured VU1 micromemory images (empty: interpreter only)")
+set(PS2X_VU1_GENERATOR_SOURCE "" CACHE FILEPATH "C++ generator for VU1 microcode")
 if(PS2X_VU1_MICROCODE_DIR AND PS2X_VU1_GENERATOR_SOURCE AND NOT PS2X_IS_ANDROID AND NOT PS2X_IS_VITA)
     file(GLOB PS2X_VU1_IMAGES CONFIGURE_DEPENDS "${PS2X_VU1_MICROCODE_DIR}/*.bin")
     if(PS2X_VU1_IMAGES)
@@ -558,7 +558,7 @@ if(PS2X_VU1_MICROCODE_DIR AND PS2X_VU1_GENERATOR_SOURCE AND NOT PS2X_IS_ANDROID 
         endforeach()
         add_custom_command(OUTPUT ${PS2X_VU1_GENERATED_PARTS}
             COMMAND "${CMAKE_COMMAND}" -E make_directory "${PS2X_VU1_GENERATED_DIR}"
-            # GOW-Port: la carpeta, no cada archivo: miles de rutas superan la línea de órdenes de Windows.
+            # The folder, not each file: thousands of paths exceed the Windows command line.
             COMMAND "$<TARGET_FILE:ps2x_vu1_generator>" "${PS2X_VU1_GENERATED_DIR}" "${PS2X_VU1_MICROCODE_DIR}"
             DEPENDS ps2x_vu1_generator ${PS2X_VU1_IMAGES}
             VERBATIM)

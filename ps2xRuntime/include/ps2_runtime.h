@@ -28,7 +28,7 @@
 #include "runtime/gs/ps2_gif_arbiter.h"
 #include "runtime/ps2_memory.h"
 #include "runtime/gs/gs_frontend.h"
-class GSHostPresentation; // GOW-Port: el header público no depende de raylib.
+class GSHostPresentation; // the public header does not depend on raylib.
 #include "runtime/ps2_vu1.h"
 #include "runtime/ps2_audio.h"
 #include "runtime/ps2_pad.h"
@@ -387,11 +387,11 @@ public:
     uint32_t guestHeapEnd() const;
     uint32_t guestHeapLimit() const;
     uint32_t reserveAsyncCallbackStack(uint32_t size, uint32_t alignment);
-    // GOW-Port: las pilas de interrupciones/callbacks se reservan desde lo alto de la RAM hacia abajo; este
-    // limite las mantiene por debajo de la pila del hilo principal (que SetupThread coloca tambien arriba).
+    // Interrupt/callback stacks are allocated downward from the top of RAM; this limit keeps them below the
+    // main thread's stack (which SetupThread also places at the top).
     void limitAsyncCallbackStackTop(uint32_t top);
-    // GOW-Port: rango fijo para el heap interno del runtime (guestMalloc), separado del que el juego
-    // configura con SetupHeap. Sin llamarlo, el runtime usa el heap de SetupHeap como en PS2Recomp.
+    // Fixed range for the runtime's internal heap (guestMalloc), separate from the one the game sets up with
+    // SetupHeap. Without calling it, the runtime uses the SetupHeap heap as upstream PS2Recomp does.
     void setPrivateGuestHeap(uint32_t base, uint32_t limit);
 
     void drainCompletedDmacHandlers(uint8_t *rdram);
@@ -401,7 +401,7 @@ public:
 
     EeScheduler &eeScheduler();
     const EeScheduler &eeScheduler() const;
-    // GOW-Port: Count pertenece al CPU, no a una copia de contexto por hilo.
+    // Count belongs to the CPU, not to a per-thread context copy.
     uint32_t readCop0Count(R5900Context *context) noexcept;
     void writeCop0Count(R5900Context *context, uint32_t value) noexcept;
     void postEeEvent(EeEvent event);
@@ -495,7 +495,7 @@ private:
     void notifyIopSifTransfer(uint8_t *rdram, const ps2x::iop::SifTransfer &transfer);
     void advanceIopEeCycles(uint64_t eeCycles) noexcept;
     void resetIop();
-    void shutdownHostGraphics(); // GOW-Port: destruir GS antes de cerrar el contexto raylib.
+    void shutdownHostGraphics(); // destroy the GS before closing the raylib context.
 
     friend class PS2IopTransport;
     friend class EeScheduler;
@@ -515,7 +515,7 @@ private:
     VU1Interpreter m_vu0{VU1Interpreter::Unit::VU0};
     VU1Interpreter m_vu1{VU1Interpreter::Unit::VU1};
     R5900Context m_cpuContext;
-    uint32_t m_cop0Count = 0u; // GOW-Port: estado global del contador EE.
+    uint32_t m_cop0Count = 0u; // global EE counter state.
     uint64_t m_cop0CountCycle = 0u;
     std::unique_ptr<EeScheduler> m_eeScheduler;
     mutable std::mutex m_eeKernelStateMutex;

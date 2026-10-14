@@ -1,8 +1,8 @@
 #pragma once
 
-// GOW-Port: formateo estilo printf para sysclib sprintf/vsprintf y stdio printf del IOP.
-// Antes, sprintf copiaba el formato literal: SMPD_IOP.IRX de God of War hace sprintf(buf, "%s.wad", nombre)
-// para buscar sus recursos y acababa buscando "%S.WAD".
+// printf-style formatting for the IOP's sysclib sprintf/vsprintf and stdio printf.
+// sprintf used to copy the format verbatim: God of War's SMPD_IOP.IRX does sprintf(buf, "%s.wad", name)
+// to find its resources and ended up looking for "%S.WAD".
 
 #include "../core/iop_memory.h"
 
@@ -13,8 +13,8 @@
 
 namespace ps2x::iop::detail
 {
-    // nextArg devuelve la siguiente palabra de 32 bits de la lista de argumentos variables
-    // (o32: a1..a3 o a2..a3 y despues la pila desde sp+16; en vsprintf, la memoria apuntada por va_list).
+    // nextArg returns the next 32-bit word of the variable argument list
+    // (o32: a1..a3 or a2..a3, then the stack from sp+16; in vsprintf, the memory va_list points to).
     inline std::string formatGuestString(const IopMemory &memory, uint32_t formatAddress,
                                          const std::function<uint32_t()> &nextArg, size_t limit = 4096u)
     {

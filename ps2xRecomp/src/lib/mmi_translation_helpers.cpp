@@ -81,7 +81,7 @@ namespace ps2recomp
         switch (subfunc)
         {
         case MMI1_PABSW:
-            return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PABSW(GPR_VEC(ctx, {})));", rd, rt); // GOW-Port: el operando es rt
+            return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PABSW(GPR_VEC(ctx, {})));", rd, rt); // the operand is rt
         case MMI1_PCEQW:
             return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PCEQW(GPR_VEC(ctx, {}), GPR_VEC(ctx, {})));", rd, rs, rt);
         case MMI1_PMINW:
@@ -89,7 +89,7 @@ namespace ps2recomp
         case MMI1_PADSBH:
             return translatePADSBH(inst);
         case MMI1_PABSH:
-            return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PABSH(GPR_VEC(ctx, {})));", rd, rt); // GOW-Port: el operando es rt
+            return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PABSH(GPR_VEC(ctx, {})));", rd, rt); // the operand is rt
         case MMI1_PCEQH:
             return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PCEQH(GPR_VEC(ctx, {}), GPR_VEC(ctx, {})));", rd, rs, rt);
         case MMI1_PMINH:
@@ -105,7 +105,7 @@ namespace ps2recomp
         case MMI1_PEXTUW:
             return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PEXTUW(GPR_VEC(ctx, {}), GPR_VEC(ctx, {})));", rd, rs, rt);
         case MMI1_PADDUH:
-            // GOW-Port: PADDUH/PSUBUH saturan sin signo (0..0xFFFF), como PCSX2.
+            // PADDUH/PSUBUH saturate unsigned (0..0xFFFF), as in PCSX2.
             return fmt::format("SET_GPR_VEC(ctx, {}, _mm_adds_epu16(GPR_VEC(ctx, {}), GPR_VEC(ctx, {})));", rd, rs, rt);
         case MMI1_PSUBUH:
             return fmt::format("SET_GPR_VEC(ctx, {}, _mm_subs_epu16(GPR_VEC(ctx, {}), GPR_VEC(ctx, {})));", rd, rs, rt);
@@ -460,21 +460,21 @@ namespace ps2recomp
 
     std::string CodeGenerator::translatePEXEH(const Instruction &inst)
     {
-        // GOW-Port: permutacion corregida segun PCSX2 (ver ps2_runtime_macros.h).
+        // permutation fixed to match PCSX2 (see ps2_runtime_macros.h).
         return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PEXEH(GPR_VEC(ctx, {})));", inst.rd, inst.rt);
     }
 
 
     std::string CodeGenerator::translatePREVH(const Instruction &inst)
     {
-        // GOW-Port: permutacion corregida segun PCSX2 (ver ps2_runtime_macros.h).
+        // permutation fixed to match PCSX2 (see ps2_runtime_macros.h).
         return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PREVH(GPR_VEC(ctx, {})));", inst.rd, inst.rt);
     }
 
 
     std::string CodeGenerator::translatePMULTH(const Instruction &inst)
     {
-        // GOW-Port: ocho productos separados y ambos pares HI/LO, incluso con rd=0.
+        // eight separate products and both HI/LO pairs, even with rd=0.
         return fmt::format("ps2_pmulth(ctx, GPR_VEC(ctx, {}), GPR_VEC(ctx, {}), {});",
                            inst.rs, inst.rt, inst.rd);
     }
@@ -516,7 +516,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translatePROT3W(const Instruction &inst)
     {
-        // GOW-Port: permutacion corregida segun PCSX2 (ver ps2_runtime_macros.h).
+        // permutation fixed to match PCSX2 (see ps2_runtime_macros.h).
         return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PROT3W(GPR_VEC(ctx, {})));", inst.rd, inst.rt);
     }
 
@@ -555,7 +555,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translatePEXCH(const Instruction &inst)
     {
-        // GOW-Port: permutacion corregida segun PCSX2 (ver ps2_runtime_macros.h).
+        // permutation fixed to match PCSX2 (see ps2_runtime_macros.h).
         return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PEXCH(GPR_VEC(ctx, {})));", inst.rd, inst.rt);
     }
 
@@ -571,7 +571,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translatePEXCW(const Instruction &inst)
     {
-        // GOW-Port: permutacion corregida segun PCSX2 (ver ps2_runtime_macros.h).
+        // permutation fixed to match PCSX2 (see ps2_runtime_macros.h).
         return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PEXCW(GPR_VEC(ctx, {})));", inst.rd, inst.rt);
     }
 

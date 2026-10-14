@@ -1,4 +1,4 @@
-// GOW-Port: readback solo al solicitar una captura independiente del registro de metadatos.
+// readback only when a capture is requested, independent of the metadata log.
 #include "runtime/gs/gs_host_acquired_capture.h"
 #include "runtime/gs/gs_host_present_diag.h"
 #include "raylib.h"
@@ -17,7 +17,7 @@ namespace
     {
         GSHostAcquiredCapture::Options options;
 #ifdef _WIN32
-        // GOW-Port: getenv estrecho usa ACP; convertir la ruta UTF-16 a UTF-8 sin perder Unicode.
+        // narrow getenv uses the ACP; convert the UTF-16 path to UTF-8 without losing Unicode.
         const wchar_t *directory = _wgetenv(L"PS2X_GS_ACQUIRED_CAPTURE_DIR");
         if (!directory || !*directory) return options;
         const auto utf8 = std::filesystem::path(directory).u8string();
@@ -32,7 +32,7 @@ namespace
         if (const char *count = std::getenv("PS2X_GS_ACQUIRED_CAPTURE_COUNT"))
         {
             const uint64_t parsed = GSHostPresentDiag::parseFromTick(count);
-            // GOW-Port: un cupo inválido desactiva la captura en vez de elevar su coste.
+            // an invalid quota disables the capture instead of raising its cost.
             options.limit = parsed >= 1u && parsed <= 16u ? static_cast<uint32_t>(parsed) : 0u;
         }
         return options;
@@ -57,18 +57,18 @@ GSHostAcquiredCapture::GSHostAcquiredCapture(Options selected) : options(std::mo
 
 bool GSHostAcquiredCapture::capture(const GSSharedPresent::Frame &frame, uint64_t hostTick) noexcept
 {
-    // GOW-Port: sin opción, fuera de ventana o con secuencia retenida no hay llamadas GL ni E/S.
+    // with no option, outside the window or with a held sequence there are no GL calls and no I/O.
     if (options.directory.empty() || attempts >= options.limit || hostTick < options.fromTick ||
         frame.sequence == 0u || frame.sequence <= lastSequence || frame.blank ||
         frame.texture == 0u || frame.width == 0u || frame.height == 0u)
         return false;
     lastSequence = frame.sequence;
-    const uint32_t index = ++attempts; // GOW-Port: también acotar intentos que fallen.
+    const uint32_t index = ++attempts; // also bound failed attempts.
     try
     {
         const auto directory = std::filesystem::u8path(options.directory);
         if (!std::filesystem::is_directory(directory))
-            throw std::runtime_error("La carpeta privada de captura debe existir");
+            throw std::runtime_error("The private capture folder must exist");
         const std::string name = "acquired_" + std::to_string(index) + "_seq_" +
                                  std::to_string(frame.sequence) + "_tick_" + std::to_string(frame.vsyncTick);
         const auto pngPath = directory / (name + ".png");
@@ -77,16 +77,16 @@ bool GSHostAcquiredCapture::capture(const GSSharedPresent::Frame &frame, uint64_
             throw std::runtime_error("La captura ya existe; no se sobrescribe");
         const Texture2D borrowed{frame.texture, static_cast<int>(frame.width), static_cast<int>(frame.height),
                                  1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
-        OwnedImage acquired(borrowed); // GOW-Port: reserva actual, sin otro Acquire ni readback de VRAM.
+        OwnedImage acquired(borrowed); // current reservation, with no other Acquire or VRAM readback.
         if (!acquired.image.data || acquired.image.width != static_cast<int>(frame.width) ||
             acquired.image.height != static_cast<int>(frame.height) ||
             acquired.image.format != PIXELFORMAT_UNCOMPRESSED_R8G8B8A8)
-            throw std::runtime_error("No se pudo leer la textura adquirida completa");
+            throw std::runtime_error("Could not read the whole acquired texture");
         int bytes = 0;
         const std::unique_ptr<unsigned char, decltype(&MemFree)> png(
             ExportImageToMemory(acquired.image, ".png", &bytes), &MemFree);
         if (!png || bytes <= 0) throw std::runtime_error("No se pudo codificar PNG");
-        // GOW-Port: filesystem/ofstream conservan rutas Windows Unicode sin depender de fopen ANSI.
+        // filesystem/ofstream keep Unicode Windows paths without relying on ANSI fopen.
         std::ofstream imageOutput(pngPath, std::ios::binary);
         imageOutput.write(reinterpret_cast<const char *>(png.get()), bytes);
         imageOutput.close();
@@ -101,7 +101,7 @@ bool GSHostAcquiredCapture::capture(const GSSharedPresent::Frame &frame, uint64_
                  << ",\n  \"hash\": \"" << std::hex << std::setw(16) << std::setfill('0') << frame.contentHash
                  << "\",\n  \"blank\": " << unsigned(frame.blank) << "\n}\n";
         metadata.close();
-        if (!metadata) throw std::runtime_error("No se pudo escribir el metadato completo");
+        if (!metadata) throw std::runtime_error("Could not write the complete metadata");
         std::fprintf(stderr, "[gs-present:capture] status=ok seq=%llu frameTick=%llu hostTick=%llu file=%s.png\n",
                      (unsigned long long)frame.sequence, (unsigned long long)frame.vsyncTick,
                      (unsigned long long)hostTick, name.c_str());

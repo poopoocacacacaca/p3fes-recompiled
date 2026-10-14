@@ -15,7 +15,7 @@
 
 namespace ps2x::iop::detail
 {
-    // GOW-Port: tope de ciclos del IOP que se dejan correr tras cada RPC (~0.1 s a 36.864 MHz).
+    // cap on IOP cycles allowed to run after each RPC (~0.1 s at 36.864 MHz).
     constexpr uint64_t kRpcSettleCycles = 4000000u;
 
     IopRpcBridge::IopRpcBridge(IopHost &host, IopMemory &memory, IopKernel &kernel) noexcept
@@ -44,7 +44,7 @@ namespace ps2x::iop::detail
             setV0(0u);
             return true;
         case 7: // sceSifSetDma
-        case 32: // GOW-Port: sceSifSetDmaIntr(dmat, count, func, data): igual, y llama a func(data) al terminar
+        case 32: // sceSifSetDmaIntr(dmat, count, func, data): the same, and calls func(data) when done
         {
             constexpr uint32_t kDescriptorSize = 16u;
             constexpr uint32_t kMaxDescriptors = 32u;
@@ -107,7 +107,7 @@ namespace ps2x::iop::detail
                 }
             }
 
-            // GOW-Port: PS2X_IOP_TRACE_DMA=1 registra cada transferencia IOP -> EE (origen, destino, tamano, datos).
+            // PS2X_IOP_TRACE_DMA=1 logs every IOP -> EE transfer (source, destination, size, data).
             static const bool traceDma = std::getenv("PS2X_IOP_TRACE_DMA") != nullptr;
             for (uint32_t i = 0u; i < pendingCount; ++i)
             {
@@ -267,8 +267,8 @@ namespace ps2x::iop::detail
             return true;
         case 23: // sceSifGetOtherData(rd, eeSrc, iopDest, size, mode)
         {
-            // GOW-Port: el IOP copia datos de la RAM del EE (smpd/989snd cargan así los bancos de sonido
-            // que el juego tiene en memoria del EE). Antes no copiaba nada y los bancos no llegaban al SPU2.
+            // The IOP copies data from EE RAM (sound drivers load the sound banks the game keeps in EE memory this
+            // way). It used to copy nothing and the banks never reached the SPU2.
             const uint32_t receiveData = cpu.gpr[4];
             const uint32_t source = cpu.gpr[5];
             const uint32_t destination = cpu.gpr[6];
@@ -343,9 +343,9 @@ namespace ps2x::iop::detail
                                                                request.send.size,
                                                                0u,
                                                                server.gp);
-        // GOW-Port: en el IOP real, si el servidor despierta a un hilo de mas prioridad (smpd: su hilo lector),
-        // ese hilo se ejecuta antes de que el hilo RPC conteste. Sin esto, smpd tomaba el destino de la lectura
-        // de la peticion siguiente y los datos acababan en el bufer equivocado.
+        // On a real IOP, if the server wakes a higher-priority thread (e.g. a reader thread), that thread runs
+        // before the RPC thread replies. Without this, the reader took the destination of the next request and the
+        // data ended up in the wrong buffer.
         executor.runReadyThreads(kRpcSettleCycles);
         if (returnPointer == 0u)
             returnPointer = server.buffer;

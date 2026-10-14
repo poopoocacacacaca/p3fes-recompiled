@@ -1,4 +1,4 @@
-// GOW-Port: preservar el pixel CT24/Z24 que atraviesa dos bloques de IMAGE.
+// keep the CT24/Z24 pixel that straddles two IMAGE blocks.
 #pragma once
 #include <algorithm>
 #include <array>
@@ -10,8 +10,8 @@ struct GSUpload24State
     std::array<uint8_t, 3> bytes{};
     uint32_t size = 0u;
 
-    // El receptor devuelve false cuando termina la transferencia; su padding se descarta.
-    // Solo copiar hasta dos bytes pendientes; entregar el resto directamente al backend.
+    // The receiver returns false when the transfer ends; its padding is dropped.
+    // Only copy up to two pending bytes; hand the rest directly to the backend.
     template <typename Receiver>
     void consume(const uint8_t *data, uint32_t length, Receiver receive)
     {

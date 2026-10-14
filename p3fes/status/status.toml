@@ -1,0 +1,101 @@
+# Port status, rendered into progress.svg by p3fes/scripts/status_chart.py.
+# Edit this file, then run:  python3 p3fes/scripts/status_chart.py
+
+updated = "2026-10-14"
+
+# EE code of SLUS_216.21 (from ps2_recomp's summary)
+[code]
+functions = 14628
+recompiled = 14423     # translated to C++
+hle = 205              # bound to runtime implementations (kernel, SIF, CD, pad, memory card libraries)
+
+# snaku/Persona3-FES-Decompilation (a separate, readable-C decompilation; not used by the build)
+[decomp]
+functions_in_c = 986   # C function definitions in its src/ at 59d284e (2026-09-04)
+commit = "59d284e"
+
+# Weighted phases toward a fully playable port. `done` is 0.0-1.0; weights are effort estimates.
+[[phase]]
+name = "Recompile the EE code"
+weight = 10
+done = 1.0
+
+[[phase]]
+name = "Boot: kernel, IOP modules, discs"
+weight = 10
+done = 1.0
+
+[[phase]]
+name = "Memory card and controller"
+weight = 5
+done = 1.0
+
+[[phase]]
+name = "Movies (video, audio, speed)"
+weight = 10
+done = 0.7
+
+[[phase]]
+name = "Renderer (PCSX2 GS, speed)"
+weight = 15
+done = 0.2
+
+[[phase]]
+name = "Title screen and menus"
+weight = 10
+done = 0.0
+
+[[phase]]
+name = "Field and Tartarus 3D"
+weight = 15
+done = 0.0
+
+[[phase]]
+name = "Battles"
+weight = 10
+done = 0.0
+
+[[phase]]
+name = "Story, events, social links"
+weight = 10
+done = 0.0
+
+[[phase]]
+name = "Full playthrough testing"
+weight = 5
+done = 0.0
+
+# Hardware and system components: state = "done" | "partial" | "todo"
+[[component]]
+name = "EE kernel (HLE)"
+state = "done"
+[[component]]
+name = "DMAC"
+state = "done"
+[[component]]
+name = "IPU (MPEG)"
+state = "done"
+[[component]]
+name = "IOP + IRX modules"
+state = "done"
+[[component]]
+name = "SPU2 + ADMA"
+state = "partial"
+[[component]]
+name = "SIO2 memory card"
+state = "done"
+[[component]]
+name = "Controller"
+state = "done"
+[[component]]
+name = "CD/DVD (CVM)"
+state = "done"
+[[component]]
+name = "GS renderer"
+state = "partial"
+[[component]]
+name = "VIF1 / VU1"
+state = "todo"
+[[component]]
+name = "Widescreen / 60 FPS"
+state = "todo"
