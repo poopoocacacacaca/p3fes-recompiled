@@ -1,4 +1,6 @@
+#include <cstdio>
 #include "runtime/ps2_memory.h"
+#include "ipu/ps2_ipu.h"
 #include "runtime/ps2_address.h"
 #include "runtime/gs/gs_frontend.h"
 #include "ps2_log.h"
@@ -388,6 +390,8 @@ bool PS2Memory::initialize(size_t ramSize)
 
         // Initialize DMA registers
         memset(dma_regs, 0, sizeof(dma_regs));
+
+        attachIpu();
 
         return true;
     }
@@ -821,6 +825,8 @@ uint64_t PS2Memory::read64(uint32_t address)
 
     // 64-bit IO read: compose from the two adjacent 32-bit IO register slots
     // to avoid any side-effects from read32 handlers.
+    if (ps2ipu::isRegister(physAddr))
+        return ps2ipu::read64(physAddr);
     if (isIoRegister(address))
     {
         uint32_t lo = m_ioRegisters.count(address) ? m_ioRegisters[address] : 0u;
@@ -856,6 +862,13 @@ __m128i PS2Memory::read128(uint32_t address)
     {
         inRange(vuOffset, sizeof(__m128i), vuLimit, "read128 vu", address);
         return _mm_loadu_si128(reinterpret_cast<const __m128i *>(vuMem + vuOffset));
+    }
+
+    if (physAddr == 0x10007000u) // IPU_OUT_FIFO
+    {
+        alignas(16) uint8_t quad[16];
+        ps2ipu::readOutFifo(quad);
+        return _mm_load_si128(reinterpret_cast<const __m128i *>(quad));
     }
 
     // 128-bit reads are primarily for quad-word loads in the EE, which are only valid for RAM areas
@@ -1062,6 +1075,11 @@ void PS2Memory::write64(uint32_t address, uint64_t value)
 
 void PS2Memory::write128(uint32_t address, __m128i value)
 {
+    {
+        static const bool ipuLog = std::getenv("PS2X_IPU_LOG") != nullptr;
+        if (ipuLog && (address & 0x1FFFFFF0u) == 0x10007010u)
+            std::fprintf(stderr, "[ipu-fifo] write\n");
+    }
     if (address & 15)
     {
         throw std::runtime_error("Unaligned 128-bit write at address: 0x" + std::to_string(address));
@@ -1070,6 +1088,13 @@ void PS2Memory::write128(uint32_t address, __m128i value)
     const bool scratch = isScratchpad(address);
     uint32_t physAddr = translateAddress(address);
 
+    if (!scratch && physAddr == 0x10007010u) // IPU_IN_FIFO
+    {
+        alignas(16) uint8_t quad[16];
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(quad), value);
+        ps2ipu::writeInFifo(quad);
+        return;
+    }
     if (!scratch && physAddr == 0x10004000u) // VIF0_FIFO
     {
         alignas(16) uint8_t fifoData[16];
@@ -1124,6 +1149,30 @@ void PS2Memory::write128(uint32_t address, __m128i value)
 
 bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 {
+    if (ps2ipu::isRegister(address))
+    {
+        ps2ipu::write32(address, value);
+        return true;
+    }
+    if (address == 0x1000B000u || address == 0x1000B400u)
+    {
+        m_ioRegisters[address] = value;
+        const auto dctrlIt = m_ioRegisters.find(0x1000E000u);
+        const bool dmacEnabled = (dctrlIt == m_ioRegisters.end()) || ((dctrlIt->second & 0x1u) != 0u);
+        if ((value & 0x100u) && dmacEnabled)
+        {
+            m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
+            ps2ipu::dmaStart(address == 0x1000B000u ? 3 : 4);
+        }
+        return true;
+    }
+    {
+        // Debug aid: PS2X_IPU_LOG=1 logs IPU register writes and IPU DMA (ch3/ch4) kicks.
+        static const bool ipuLog = std::getenv("PS2X_IPU_LOG") != nullptr;
+        if (ipuLog && ((address >= 0x10002000u && address <= 0x10002030u) ||
+                       address == 0x1000B000u || address == 0x1000B400u))
+            std::fprintf(stderr, "[ipu-io] %08X <- %08X\n", address, value);
+    }
     size_t timerIndex = 0u;
     uint32_t timerOffset = 0u;
     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
@@ -1305,6 +1354,19 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
             const uint32_t madr = m_ioRegisters[channelBase + 0x10];
             const uint32_t qwc = m_ioRegisters[channelBase + 0x20];
             m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
+
+            {
+                // Debug aid: PS2X_DMA_LOG=1 logs every EE DMAC channel start (first 4000).
+                static const bool dmaLog = std::getenv("PS2X_DMA_LOG") != nullptr;
+                static uint32_t dmaLogCount = 0u;
+                if (dmaLog && dmaLogCount < 2000000u)
+                {
+                    ++dmaLogCount;
+                    std::fprintf(stderr, "[dma] ch=%08X chcr=%08X madr=%08X qwc=%04X tadr=%08X sadr=%08X\n",
+                                 channelBase, value, madr, qwc & 0xFFFFu, m_ioRegisters[channelBase + 0x30],
+                                 m_ioRegisters[channelBase + 0x80]);
+                }
+            }
 
             if (tryProcessScratchpadDma(channelBase, value))
             {
@@ -1586,59 +1648,202 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
 bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
 {
+    // Scratchpad DMA (ch8 fromSPR, ch9 toSPR): normal, chain and interleave
+    // modes, following PCSX2's SPR.cpp. Transfers complete synchronously.
+    // Chain/interleave support needs proper testing beyond the Sofdec/libmpeg
+    // motion-compensation path it was written for.
     static constexpr uint32_t kSprFromChannel = 0x1000D000u;
     static constexpr uint32_t kSprToChannel = 0x1000D400u;
+    static constexpr uint32_t kDSqwc = 0x1000E030u;
     if (channelBase != kSprFromChannel && channelBase != kSprToChannel)
         return false;
 
-    const uint32_t mode = (chcr >> 2u) & 0x3u;
-    if (mode != 0u)
-        return false;
-
-    const uint32_t qwc = m_ioRegisters[channelBase + 0x20u] & 0xFFFFu;
-    const uint32_t byteCount = qwc * 16u;
-    const uint32_t originalMadr = m_ioRegisters[channelBase + 0x10u] & 0x7FFFFFF0u;
-    const uint32_t originalSadr = m_ioRegisters[channelBase + 0x80u] & 0x3FF0u;
-
-    uint32_t mainOffset = 0u;
-    try
-    {
-        mainOffset = translateAddress(originalMadr);
-    }
-    catch (const std::exception &)
-    {
-        return false;
-    }
-
-    if (mainOffset > PS2_RAM_SIZE || byteCount > PS2_RAM_SIZE - mainOffset)
-        return false;
-
     const bool fromScratchpad = channelBase == kSprFromChannel;
-    uint32_t scratchOffset = originalSadr;
-    uint32_t bytesLeft = byteCount;
-    uint32_t copied = 0u;
-    while (bytesLeft != 0u)
-    {
-        const uint32_t scratchChunk = PS2_SCRATCHPAD_SIZE - scratchOffset;
-        const uint32_t chunk = std::min(bytesLeft, scratchChunk);
-        if (fromScratchpad)
-        {
-            std::memcpy(m_rdram + mainOffset + copied, m_scratchpad + scratchOffset, chunk);
-            markModified(mainOffset + copied, chunk);
-        }
-        else
-        {
-            std::memcpy(m_scratchpad + scratchOffset, m_rdram + mainOffset + copied, chunk);
-        }
+    uint32_t madr = m_ioRegisters[channelBase + 0x10u];
+    uint32_t qwc = m_ioRegisters[channelBase + 0x20u] & 0xFFFFu;
+    uint32_t tadr = m_ioRegisters[channelBase + 0x30u];
+    uint32_t asr0 = m_ioRegisters[channelBase + 0x40u];
+    uint32_t asr1 = m_ioRegisters[channelBase + 0x50u];
+    uint32_t sadr = m_ioRegisters[channelBase + 0x80u] & 0x3FF0u;
+    uint32_t asp = (chcr >> 4) & 0x3u;
+    uint32_t tagField = chcr & 0xFFFF0000u;
+    const uint32_t mode = (chcr >> 2u) & 0x3u;
+    const bool tte = (chcr & 0x40u) != 0u;
+    const bool tie = (chcr & 0x80u) != 0u;
 
-        copied += chunk;
-        bytesLeft -= chunk;
-        scratchOffset = (scratchOffset + chunk) & (PS2_SCRATCHPAD_SIZE - 1u);
+    auto ramPtr = [&](uint32_t addr) -> uint8_t *
+    {
+        const uint32_t phys = addr & 0x0FFFFFF0u;
+        if (phys + 16u > PS2_RAM_SIZE)
+            return nullptr;
+        return m_rdram + phys;
+    };
+
+    // Moves count quadwords between main RAM at madr and SPR at sadr.
+    auto move = [&](uint32_t count) -> bool
+    {
+        while (count != 0u)
+        {
+            uint8_t *ram = ramPtr(madr);
+            if (!ram)
+                return false;
+            if (fromScratchpad)
+            {
+                std::memcpy(ram, m_scratchpad + sadr, 16);
+                markModified(madr & 0x0FFFFFF0u, 16);
+            }
+            else
+            {
+                std::memcpy(m_scratchpad + sadr, ram, 16);
+            }
+            madr += 16u;
+            sadr = (sadr + 16u) & 0x3FF0u;
+            --count;
+        }
+        return true;
+    };
+
+    bool ok = true;
+    if (mode == 0u)
+    {
+        ok = move(qwc);
+        qwc = 0u;
+    }
+    else if (mode == 2u)
+    {
+        const uint32_t sqwcReg = m_ioRegisters.count(kDSqwc) ? m_ioRegisters[kDSqwc] : 0u;
+        const uint32_t skip = sqwcReg & 0xFFu;
+        uint32_t transferChunk = (sqwcReg >> 16) & 0xFFu;
+        if (transferChunk == 0u)
+            transferChunk = qwc;
+        uint32_t left = qwc;
+        while (ok && left != 0u)
+        {
+            const uint32_t n = std::min(transferChunk, left);
+            ok = move(n);
+            left -= n;
+            madr += skip * 16u;
+        }
+        qwc = 0u;
+    }
+    else
+    {
+        // A non-zero QWC on start finishes the current packet first.
+        bool done = false;
+        if (qwc != 0u)
+        {
+            ok = move(qwc);
+            qwc = 0u;
+            const uint32_t id = (tagField >> 28) & 0x7u;
+            if (fromScratchpad ? (id == 7u) : (id == 0u || id == 7u))
+                done = true;
+        }
+        for (int guard = 0; ok && !done && guard < 65536; ++guard)
+        {
+            uint32_t tag0 = 0u;
+            uint32_t tag1 = 0u;
+            if (fromScratchpad)
+            {
+                // Destination chain: tag lives in SPR, data follows it.
+                std::memcpy(&tag0, m_scratchpad + sadr, 4);
+                std::memcpy(&tag1, m_scratchpad + sadr + 4u, 4);
+                sadr = (sadr + 16u) & 0x3FF0u;
+                madr = tag1;
+                qwc = tag0 & 0xFFFFu;
+                tagField = tag0 & 0xFFFF0000u;
+                const uint32_t id = (tag0 >> 28) & 0x7u;
+                done = (id == 7u); // END; CNT/CNTS continue
+            }
+            else
+            {
+                uint8_t *tagPtr = ramPtr(tadr);
+                if (!tagPtr)
+                {
+                    ok = false;
+                    break;
+                }
+                std::memcpy(&tag0, tagPtr, 4);
+                std::memcpy(&tag1, tagPtr + 4u, 4);
+                qwc = tag0 & 0xFFFFu;
+                tagField = tag0 & 0xFFFF0000u;
+                const uint32_t id = (tag0 >> 28) & 0x7u;
+                const uint32_t addr = tag1;
+                if (tte)
+                {
+                    std::memcpy(m_scratchpad + sadr, tagPtr, 16);
+                    sadr = (sadr + 16u) & 0x3FF0u;
+                }
+                switch (id)
+                {
+                case 0u: // REFE
+                    madr = addr;
+                    tadr += 16u;
+                    done = true;
+                    break;
+                case 1u: // CNT
+                    madr = tadr + 16u;
+                    tadr = madr + qwc * 16u;
+                    break;
+                case 2u: // NEXT
+                    madr = tadr + 16u;
+                    tadr = addr;
+                    break;
+                case 3u: // REF
+                case 4u: // REFS
+                    madr = addr;
+                    tadr += 16u;
+                    break;
+                case 5u: // CALL
+                    madr = tadr + 16u;
+                    if (asp == 0u)
+                        asr0 = madr + qwc * 16u;
+                    else if (asp == 1u)
+                        asr1 = madr + qwc * 16u;
+                    else
+                        done = true;
+                    if (asp < 2u)
+                        ++asp;
+                    tadr = addr;
+                    break;
+                case 6u: // RET
+                    madr = tadr + 16u;
+                    if (asp == 2u)
+                    {
+                        tadr = asr1;
+                        asp = 1u;
+                    }
+                    else if (asp == 1u)
+                    {
+                        tadr = asr0;
+                        asp = 0u;
+                    }
+                    else
+                    {
+                        done = true;
+                    }
+                    break;
+                case 7u: // END
+                default:
+                    madr = tadr + 16u;
+                    done = true;
+                    break;
+                }
+            }
+            ok = move(qwc);
+            qwc = 0u;
+            if (tie && (tag0 & 0x80000000u))
+                done = true;
+        }
     }
 
-    m_ioRegisters[channelBase + 0x10u] = (originalMadr + byteCount) & 0x7FFFFFF0u;
+    m_ioRegisters[channelBase] = (chcr & 0x0000FFCFu & ~0x100u) | (asp << 4) | tagField;
+    m_ioRegisters[channelBase + 0x10u] = madr;
     m_ioRegisters[channelBase + 0x20u] = 0u;
-    m_ioRegisters[channelBase + 0x80u] = (originalSadr + byteCount) & 0x3FF0u;
+    m_ioRegisters[channelBase + 0x30u] = tadr;
+    m_ioRegisters[channelBase + 0x40u] = asr0;
+    m_ioRegisters[channelBase + 0x50u] = asr1;
+    m_ioRegisters[channelBase + 0x80u] = sadr;
+    (void)ok;
     completeDmacChannel(channelBase, fromScratchpad ? 8u : 9u);
     return true;
 }
@@ -1909,6 +2114,53 @@ void PS2Memory::queueCompletedDmacCause(uint32_t cause)
 {
     std::lock_guard<std::mutex> lock(m_completedDmacMutex);
     m_completedDmacCauses.push_back(cause);
+}
+
+void PS2Memory::queueIntcCause(uint32_t cause)
+{
+    std::lock_guard<std::mutex> lock(m_completedDmacMutex);
+    m_pendingIntcCauses.push_back(cause);
+}
+
+std::vector<uint32_t> PS2Memory::consumePendingIntcCauses()
+{
+    std::lock_guard<std::mutex> lock(m_completedDmacMutex);
+    std::vector<uint32_t> causes;
+    causes.swap(m_pendingIntcCauses);
+    return causes;
+}
+
+void PS2Memory::attachIpu()
+{
+    ps2ipu::Host host;
+    host.rdram = m_rdram;
+    host.rdramSize = PS2_RAM_SIZE;
+    host.scratchpad = m_scratchpad;
+    auto bind = [&](uint32_t base)
+    {
+        ps2ipu::ChannelRegs regs;
+        regs.chcr = &m_ioRegisters[base + 0x00u];
+        regs.madr = &m_ioRegisters[base + 0x10u];
+        regs.qwc = &m_ioRegisters[base + 0x20u];
+        regs.tadr = &m_ioRegisters[base + 0x30u];
+        regs.asr0 = &m_ioRegisters[base + 0x40u];
+        regs.asr1 = &m_ioRegisters[base + 0x50u];
+        return regs;
+    };
+    host.fromIpu = bind(0x1000B000u);
+    host.toIpu = bind(0x1000B400u);
+    // D_CTRL / D_STADR stall control is not modelled for the IPU channels.
+    host.dmacIrq = [this](uint32_t cause)
+    {
+        completeDmacChannel(cause == 3u ? 0x1000B000u : 0x1000B400u, cause);
+    };
+    host.intcIrq = [this]()
+    {
+        uint32_t &istat = m_ioRegisters[0x1000F000u];
+        istat |= 1u << 8;
+        queueIntcCause(8u);
+    };
+    ps2ipu::attach(host);
 }
 
 std::vector<uint32_t> PS2Memory::consumeCompletedDmacCauses()
@@ -2280,6 +2532,8 @@ int PS2Memory::pollDmaRegisters()
 
 uint32_t PS2Memory::readIORegister(uint32_t address)
 {
+    if (ps2ipu::isRegister(address))
+        return ps2ipu::read32(address);
     size_t timerIndex = 0u;
     uint32_t timerOffset = 0u;
     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
@@ -2472,8 +2726,20 @@ void PS2Memory::markModified(uint32_t address, uint32_t size)
             size_t bitIndex = (addr - region.start) / 4;
             if (bitIndex < region.modified.size())
             {
+                // The executable PT_LOAD segment of many games also holds their
+                // data/bss, so log only the first few transitions instead of
+                // every word of every DMA into it.
+                if (!region.modified[bitIndex])
+                {
+                    static uint32_t s_modifiedLogs = 0u;
+                    if (s_modifiedLogs < 32u)
+                    {
+                        ++s_modifiedLogs;
+                        RUNTIME_LOG("Marked code at " << std::hex << addr << std::dec << " as modified"
+                                                      << (s_modifiedLogs == 32u ? " (further reports suppressed)" : "") << std::endl);
+                    }
+                }
                 region.modified[bitIndex] = true;
-                RUNTIME_LOG("Marked code at " << std::hex << addr << std::dec << " as modified");
             }
         }
     }

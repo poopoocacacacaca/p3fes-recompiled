@@ -16,6 +16,7 @@ option(PS2X_ENABLE_IOP_RPC_TRACE "Log unhandled IOP/SIF RPC trace suggestions" O
 option(PS2X_STRICT_RETURN_DIAGNOSTICS "Route generated JR $ra returns through runtime branch diagnostics" OFF)
 option(PS2X_SHOW_WINDOWS_CONSOLE "Show a console window for ps2EntryRunner on Windows release builds" ON)
 option(PS2X_ENABLE_DEBUG_UI "Build the desktop runtime debug UI" ON)
+option(PS2X_ENABLE_LTO "Use link-time optimization in Release builds" ON)
 
 if(PS2X_ENABLE_SCCACHE)
     find_program(PS2X_SCCACHE_PROGRAM sccache)
@@ -394,6 +395,13 @@ add_library(ps2_runtime STATIC
     src/lib/vu/ps2_vu1_upper.cpp
     src/lib/vu/ps2_vu1_lower.cpp
     src/lib/games_database.cpp
+    src/lib/ipu/ipu_glue.cpp
+    src/lib/ipu/ipu_core.cpp
+    src/lib/ipu/ipu_fifo.cpp
+    src/lib/ipu/ipu_dma.cpp
+    src/lib/ipu/IPU_MultiISA.cpp
+    src/lib/ipu/IPUdither.cpp
+    src/lib/ipu/yuv2rgb.cpp
 )
 
 if(PS2X_ENABLE_RUNTIME_LOGS)
@@ -463,6 +471,9 @@ else()
 endif()
 
 if(PS2X_ENABLE_RUNNER_UNITY_BUILD)
+    # Keep the hand-written runner entry point out of the generated-code unity
+    # batches so editing it does not recompile recompiled game functions.
+    set_source_files_properties("${ROOT_MAIN_CPP}" "${RUNNER_MAIN_CPP}" PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
     set_target_properties(ps2EntryRunner PROPERTIES
         UNITY_BUILD ON
         UNITY_BUILD_BATCH_SIZE "${PS2X_RUNNER_UNITY_BUILD_BATCH_SIZE}"

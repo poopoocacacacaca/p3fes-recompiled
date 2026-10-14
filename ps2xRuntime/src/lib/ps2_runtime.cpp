@@ -737,6 +737,9 @@ bool PS2Runtime::initialize(const char *title)
         m_audioBackend.setAudioReady(IsAudioDeviceReady());
 #endif
         SetTargetFPS(60);
+        // Escape is mapped to the pad's Circle button; don't let raylib treat it
+        // as "close window".
+        SetExitKey(KEY_NULL);
         if (m_debugUiInitCallback)
         {
             m_debugUiInitCallback(*this, m_debugUiUserData);
@@ -974,6 +977,27 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
         const uint32_t hardLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
         m_asyncCallbackStackFloor = std::min(std::max(hardLimit, suggestedHeapBase), PS2_RAM_SIZE);
         m_asyncCallbackStackTop = PS2_RAM_SIZE;
+
+        // Experiment: by default callback/interrupt invocation stacks are carved
+        // from the top of RAM, which is also where SetupThread(stack=-1) puts the
+        // main thread's stack, so handler frames can overwrite live main-thread
+        // frames. PS2X_CALLBACK_STACK_TOP (and optional _FLOOR) move them elsewhere.
+        if (const char *topEnv = std::getenv("PS2X_CALLBACK_STACK_TOP"); topEnv && *topEnv)
+        {
+            const uint32_t top = static_cast<uint32_t>(std::strtoul(topEnv, nullptr, 0)) & ~0xFu;
+            uint32_t floor = top > 0x70000u ? top - 0x70000u : 0u;
+            if (const char *floorEnv = std::getenv("PS2X_CALLBACK_STACK_FLOOR"); floorEnv && *floorEnv)
+            {
+                floor = static_cast<uint32_t>(std::strtoul(floorEnv, nullptr, 0));
+            }
+            if (top != 0u && top <= PS2_RAM_SIZE && floor < top)
+            {
+                m_asyncCallbackStackTop = top;
+                m_asyncCallbackStackFloor = floor;
+                std::fprintf(stderr, "[callback-stacks] region moved to 0x%08X-0x%08X\n", floor, top);
+                std::fflush(stderr);
+            }
+        }
     }
 
     LoadedModule module;
@@ -1192,7 +1216,21 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
                                        const char *debugName)
 {
     const MissingFunctionPolicy policy = missingFunctionPolicy();
-    const bool firstReport = !m_missingFunctionReported.exchange(true, std::memory_order_acq_rel);
+    bool firstReport = !m_missingFunctionReported.exchange(true, std::memory_order_acq_rel);
+    // Debug aid: PS2X_REPORT_ALL_BRANCHES=1 logs every bad branch (capped),
+    // not just the first one, so an early benign report can't hide later ones.
+    {
+        static const bool s_reportAll = []()
+        {
+            const char *env = std::getenv("PS2X_REPORT_ALL_BRANCHES");
+            return env && *env && *env != '0';
+        }();
+        static std::atomic<uint32_t> s_reportCount{0u};
+        if (s_reportAll && s_reportCount.fetch_add(1u, std::memory_order_relaxed) < 500u)
+        {
+            firstReport = true;
+        }
+    }
 
     const uint32_t pc = ctx->pc;
     const uint32_t ra = static_cast<uint32_t>(_mm_extract_epi32(ctx->r[31], 0));
@@ -1353,9 +1391,81 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     ctx->pc = targetPc;
     const bool isCall = (kind == GuestBranchKind::DirectCall || kind == GuestBranchKind::IndirectCall);
 
-    // Every inter-function transfer is also a deterministic EE safe point.
-    // Backward edges inside generated functions use eeCheckpointDue(), while
-    // this charge bounds straight-line call chains that have no local loop.
+    // Debug aid: PS2X_EE_TRACE_CALLS=addr[,addr...] (or @file with one hex address
+    // per line) logs calls to those guest functions: the first 4 calls of each with
+    // a0-a3, then a count line each time a function's call count hits a power of two.
+    {
+        static const std::unordered_map<uint32_t, std::string> traced = []()
+        {
+            std::unordered_map<uint32_t, std::string> out;
+            const char *env = std::getenv("PS2X_EE_TRACE_CALLS");
+            if (!env)
+                return out;
+            std::string all(env);
+            if (!all.empty() && all[0] == '@')
+            {
+                std::ifstream in(all.substr(1));
+                std::string line;
+                while (std::getline(in, line))
+                {
+                    if (line.empty())
+                        continue;
+                    const uint32_t a = static_cast<uint32_t>(std::strtoul(line.c_str(), nullptr, 16));
+                    const size_t sp = line.find(' ');
+                    out[a] = sp == std::string::npos ? std::string() : line.substr(sp + 1);
+                }
+                return out;
+            }
+            size_t pos = 0;
+            while (pos < all.size())
+            {
+                const size_t comma = all.find(',', pos);
+                out[static_cast<uint32_t>(std::strtoul(all.substr(pos, comma - pos).c_str(), nullptr, 16))] = {};
+                if (comma == std::string::npos)
+                    break;
+                pos = comma + 1;
+            }
+            return out;
+        }();
+        if (!traced.empty())
+        {
+            const auto hit = traced.find(targetPc);
+            if (hit != traced.end())
+            {
+                static std::unordered_map<uint32_t, uint64_t> counts;
+                const uint64_t n = ++counts[targetPc];
+                auto str = [&](uint32_t a) -> std::string
+                {
+                    std::string out;
+                    if ((a & 0x1FFFFFFFu) >= 0x100000u && (a & 0x1FFFFFFFu) < PS2_RAM_SIZE)
+                        for (uint32_t i = 0; i < 48; ++i)
+                        {
+                            const char c = static_cast<char>(rdram[(a & 0x1FFFFFFFu) + i]);
+                            if (c == 0)
+                                break;
+                            out.push_back((c >= 32 && c < 127) ? c : '.');
+                        }
+                    return out;
+                };
+                if (n <= 4u)
+                {
+                    if (std::getenv("PS2X_EE_TRACE_64"))
+                        std::fprintf(stderr, "[ee-call64] %08X a0=%016llX a1=%016llX ra=%08X\n", targetPc,
+                                     static_cast<unsigned long long>(GPR_U64(ctx, 4)), static_cast<unsigned long long>(GPR_U64(ctx, 5)),
+                                     getRegU32(ctx, 31));
+                    std::fprintf(stderr, "[ee-call] %08X %s from %08X a0=%08X a1=%08X a2=%08X a3=%08X \"%s\" \"%s\"\n",
+                                 targetPc, hit->second.c_str(), sourcePc, getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 6), getRegU32(ctx, 7),
+                                 str(getRegU32(ctx, 4)).c_str(), str(getRegU32(ctx, 5)).c_str());
+                }
+                else if ((n & (n - 1u)) == 0u)
+                {
+                    std::fprintf(stderr, "[ee-count] %08X %s n=%llu\n", targetPc, hit->second.c_str(),
+                                 static_cast<unsigned long long>(n));
+                }
+            }
+        }
+    }
+
     if (m_eeScheduler && m_eeScheduler->checkpointDue(EeScheduler::kGuestDispatchCycles))
     {
         return false;
@@ -1488,6 +1598,12 @@ void PS2Runtime::drainCompletedDmacHandlers(uint8_t *rdram)
     for (uint32_t cause : m_memory.consumeCompletedDmacCauses())
     {
         ps2_syscalls::dispatchDmacHandlersForCause(rdram, this, cause);
+    }
+    // INTC causes raised by memory-mapped devices (currently the IPU, cause 8).
+    for (uint32_t cause : m_memory.consumePendingIntcCauses())
+    {
+        if (m_eeScheduler)
+            m_eeScheduler->dispatchIrq(false, cause);
     }
 }
 
@@ -2469,4 +2585,9 @@ void PS2Runtime::run()
     CloseWindow();
 
     RUNTIME_LOG("[run] exiting loop");
+}
+
+std::string PS2Runtime::dispatchHistoryString() const
+{
+    return formatDispatchHistory();
 }

@@ -345,6 +345,7 @@ public:
     void processVIF1Data(const uint8_t *data, uint32_t sizeBytes);
     void processPendingTransfers();
     std::vector<uint32_t> consumeCompletedDmacCauses();
+    std::vector<uint32_t> consumePendingIntcCauses();
 
     int pollDmaRegisters();
 
@@ -452,6 +453,9 @@ public:
     bool tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr);
     void completeDmacChannel(uint32_t channelBase, uint32_t cause);
     void queueCompletedDmacCause(uint32_t cause);
+    void queueIntcCause(uint32_t cause);
+    void attachIpu();
+    std::vector<uint32_t> m_pendingIntcCauses;
 };
 
 #endif // PS2_MEMORY_H
