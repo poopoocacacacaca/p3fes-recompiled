@@ -4,6 +4,7 @@
   <source media="(prefers-color-scheme: dark)" srcset="p3fes/branding/logo-dark.png">
   <img src="p3fes/branding/logo-light.png" alt="Persona 3 FES Recompiled" width="85%">
 </picture>
+
 **An attempt at a static recompilation of *Shin Megami Tensei: Persona 3 FES* (NTSC-U `SLUS-21621`)**<br>
 The game's MIPS R5900 code is statically recompiled to C++ and run on a reimplementation of the PS2 hardware. No emulator is involved.
 
