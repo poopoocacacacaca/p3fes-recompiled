@@ -64,7 +64,7 @@ namespace ps2recomp
             }
         }
         case COP2_QMTC2:
-            return fmt::format("ctx->vu0_vf[{}] = _mm_castsi128_ps(GPR_VEC(ctx, {}));", rd, rt);
+            return fmt::format("PS2_VU0_VF_WRITE(ctx, {}, _mm_castsi128_ps(GPR_VEC(ctx, {})));", rd, rt);
         case COP2_CTC2:
         {
             if (rd < 16)
@@ -231,7 +231,7 @@ namespace ps2recomp
                                        "const __m128i denormal = _mm_cmpeq_epi32(_mm_and_si128(bits, _mm_set1_epi32(0x7F800000)), _mm_setzero_si128()); "
                                        "__m128 res = _mm_castsi128_ps(_mm_andnot_si128(denormal, _mm_and_si128(bits, _mm_set1_epi32(0x7FFFFFFF)))); "
                                        "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                                       "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                                       "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                                        inst.rd,
                                        (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                                        (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -242,7 +242,7 @@ namespace ps2recomp
                     uint8_t dest_mask = inst.vectorInfo.vectorField;
                     return fmt::format(
                         "{{ __m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                        "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], _mm_castsi128_ps(mask)); }}",
+                        "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], _mm_castsi128_ps(mask))); }}",
                         (dest_mask & 0x1) ? -1 : 0,
                         (dest_mask & 0x2) ? -1 : 0,
                         (dest_mask & 0x4) ? -1 : 0,
@@ -255,7 +255,7 @@ namespace ps2recomp
                     return fmt::format(
                         "{{ __m128 res = _mm_shuffle_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], _MM_SHUFFLE(0,3,2,1)); "
                         "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                        "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                        "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                         inst.rd, inst.rd,
                         (dest_mask & 0x1) ? -1 : 0,
                         (dest_mask & 0x2) ? -1 : 0,

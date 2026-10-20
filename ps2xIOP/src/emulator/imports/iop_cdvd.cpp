@@ -52,6 +52,7 @@ namespace ps2x::iop::detail
         constexpr uint32_t kCdvdInitExit = 5u;
         constexpr uint32_t kCdvdCallbackRead = 1u;
         constexpr uint32_t kCdvdCallbackSeek = 4u;
+        constexpr uint32_t kCdvdCallbackStop = 6u; // SCECdFuncStop
         constexpr uint32_t kCdvdInterruptReadyBits = 0x29u;
         constexpr uint32_t kEventFlagMulti = 2u;
         constexpr uint32_t kCdvdStreamTimeout = 5000u;
@@ -300,6 +301,21 @@ namespace ps2x::iop::detail
 
             case 11: // sceCdSync
                 cpu.gpr[2] = 0u;
+                return true;
+
+            case 15: // sceCdStop. Without a drive there is nothing to stop: it completes at once (the callback, if any,
+                     // runs like sceCdSeek's). Unhandled, an IOP thread waiting for it spun forever (god-of-war-recomp, cd-stop).
+                lastError = kCdvdErrorNone;
+                signalCommandComplete();
+                if (callback.address != 0u)
+                {
+                    completionCallback = CompletionCallback{
+                        callback.address,
+                        callback.gp,
+                        kCdvdCallbackStop,
+                    };
+                }
+                cpu.gpr[2] = 1u;
                 return true;
 
             case 12: // sceCdGetDiskType

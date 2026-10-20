@@ -77,7 +77,9 @@ namespace
     constexpr uint32_t WEF_OR = 0x01u;
     constexpr uint32_t WEF_CLEAR = 0x10u;
     constexpr uint32_t WEF_CLEAR_ALL = 0x20u;
-    constexpr auto kVBlankPeriod = std::chrono::microseconds(16667);
+    // The NTSC field is 60/1.001 Hz (59.94 Hz, 16,683.35 us). With 16,667 us movies ran at 30.00 frames/s instead of
+    // 29.97 and the audio fell 0.1% behind (from god-of-war-recomp, vblank-ntsc).
+    constexpr auto kVBlankPeriod = std::chrono::nanoseconds(16683350);
     constexpr auto kVBlankDuration = std::chrono::microseconds(500);
     constexpr uint64_t kAlarmTickMicroseconds = 64u;
     constexpr uint32_t kDebugPublishDispatchInterval = 4096u;
@@ -96,7 +98,7 @@ namespace
         return std::chrono::seconds(wholeSeconds) + std::chrono::nanoseconds(remainingNanoseconds);
     }
 
-    constexpr uint64_t kVBlankPeriodCycles = microsecondsToEeCycles(16667u);
+    constexpr uint64_t kVBlankPeriodCycles = EeScheduler::kEeClockHz * 1001ull / 60000ull; // one NTSC field
     constexpr uint64_t kVBlankDurationCycles = microsecondsToEeCycles(500u);
     constexpr uint64_t kAlarmTickCycles = microsecondsToEeCycles(kAlarmTickMicroseconds);
 

@@ -16,7 +16,7 @@ namespace ps2recomp
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         uint8_t field = inst.function & 0x3;
         std::string shuffle_pattern = fmt::format("_MM_SHUFFLE({},{},{},{})", field, field, field, field);
-        return fmt::format("{{ __m128 res = PS2_VADD(ctx->vu0_vf[{}], _mm_shuffle_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], {})); __m128i mask = _mm_set_epi32({}, {}, {}, {}); ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}", vfs, vft, vft, shuffle_pattern, (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0, (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0, vfd, vfd);
+        return fmt::format("{{ __m128 res = PS2_VADD(ctx->vu0_vf[{}], _mm_shuffle_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], {})); __m128i mask = _mm_set_epi32({}, {}, {}, {}); PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}", vfs, vft, vft, shuffle_pattern, (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0, (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0, vfd, vfd);
     }
 
     std::string CodeGenerator::translateVU_VSUB_Field(const Instruction &inst)
@@ -27,7 +27,7 @@ namespace ps2recomp
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         uint8_t field = inst.function & 0x3;
         std::string shuffle_pattern = fmt::format("_MM_SHUFFLE({},{},{},{})", field, field, field, field);
-        return fmt::format("{{ __m128 res = PS2_VSUB(ctx->vu0_vf[{}], _mm_shuffle_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], {})); __m128i mask = _mm_set_epi32({}, {}, {}, {}); ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}", vfs, vft, vft, shuffle_pattern, (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0, (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0, vfd, vfd);
+        return fmt::format("{{ __m128 res = PS2_VSUB(ctx->vu0_vf[{}], _mm_shuffle_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], {})); __m128i mask = _mm_set_epi32({}, {}, {}, {}); PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}", vfs, vft, vft, shuffle_pattern, (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0, (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0, vfd, vfd);
     }
 
     std::string CodeGenerator::translateVU_VMUL_Field(const Instruction &inst)
@@ -38,7 +38,7 @@ namespace ps2recomp
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         uint8_t field = inst.function & 0x3;
         std::string shuffle_pattern = fmt::format("_MM_SHUFFLE({},{},{},{})", field, field, field, field);
-        return fmt::format("{{ __m128 res = PS2_VMUL(ctx->vu0_vf[{}], _mm_shuffle_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], {})); __m128i mask = _mm_set_epi32({}, {}, {}, {}); ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}", vfs, vft, vft, shuffle_pattern, (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0, (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0, vfd, vfd);
+        return fmt::format("{{ __m128 res = PS2_VMUL(ctx->vu0_vf[{}], _mm_shuffle_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], {})); __m128i mask = _mm_set_epi32({}, {}, {}, {}); PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}", vfs, vft, vft, shuffle_pattern, (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0, (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0, vfd, vfd);
     }
 
     std::string CodeGenerator::translateVU_VADD(const Instruction &inst)
@@ -47,7 +47,7 @@ namespace ps2recomp
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
-        return fmt::format("{{ __m128 res = PS2_VADD(ctx->vu0_vf[{}], ctx->vu0_vf[{}]); __m128i mask = _mm_set_epi32({}, {}, {}, {}); ctx->vu0_vf[{}] = PS2_VBLEND(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}", vfs, vft, (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0, (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0, vfd, vfd);
+        return fmt::format("{{ __m128 res = PS2_VADD(ctx->vu0_vf[{}], ctx->vu0_vf[{}]); __m128i mask = _mm_set_epi32({}, {}, {}, {}); PS2_VU0_VF_WRITE(ctx, {}, PS2_VBLEND(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}", vfs, vft, (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0, (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0, vfd, vfd);
     }
 
     std::string CodeGenerator::translateVU_VSUB(const Instruction &inst)
@@ -56,7 +56,7 @@ namespace ps2recomp
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
-        return fmt::format("{{ __m128 res = PS2_VSUB(ctx->vu0_vf[{}], ctx->vu0_vf[{}]); __m128i mask = _mm_set_epi32({}, {}, {}, {}); ctx->vu0_vf[{}] = PS2_VBLEND(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}", vfs, vft, (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0, (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0, vfd, vfd);
+        return fmt::format("{{ __m128 res = PS2_VSUB(ctx->vu0_vf[{}], ctx->vu0_vf[{}]); __m128i mask = _mm_set_epi32({}, {}, {}, {}); PS2_VU0_VF_WRITE(ctx, {}, PS2_VBLEND(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}", vfs, vft, (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0, (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0, vfd, vfd);
     }
 
     std::string CodeGenerator::translateVU_VMUL(const Instruction &inst)
@@ -65,7 +65,7 @@ namespace ps2recomp
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
-        return fmt::format("{{ __m128 res = PS2_VMUL(ctx->vu0_vf[{}], ctx->vu0_vf[{}]); __m128i mask = _mm_set_epi32({}, {}, {}, {}); ctx->vu0_vf[{}] = PS2_VBLEND(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}", vfs, vft, (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0, (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0, vfd, vfd);
+        return fmt::format("{{ __m128 res = PS2_VMUL(ctx->vu0_vf[{}], ctx->vu0_vf[{}]); __m128i mask = _mm_set_epi32({}, {}, {}, {}); PS2_VU0_VF_WRITE(ctx, {}, PS2_VBLEND(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}", vfs, vft, (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0, (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0, vfd, vfd);
     }
 
     std::string CodeGenerator::translateVU_VDIV(const Instruction &inst)
@@ -98,6 +98,11 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMTIR(const Instruction &inst)
     {
+        // GOW-Port: VI0 is the constant zero register.
+        if (inst.rt == 0)
+        {
+            return "{ }";
+        }
         uint8_t fsf = inst.vectorInfo.fsf;
         return fmt::format("{{ uint32_t bits; float src = _mm_cvtss_f32(_mm_shuffle_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], _MM_SHUFFLE(0,0,0,{}))); std::memcpy(&bits, &src, sizeof(bits)); ctx->vi[{}] = (uint16_t)(bits & 0xFFFF); }}", inst.rd, inst.rd, fsf, inst.rt);
     }
@@ -108,7 +113,7 @@ namespace ps2recomp
         return fmt::format("{{ uint32_t tmp = (uint32_t)(int32_t)(int16_t)ctx->vi[{}]; float val; std::memcpy(&val, &tmp, sizeof(val)); "
                            "__m128 res = _mm_set1_ps(val); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            inst.rd,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -226,7 +231,7 @@ namespace ps2recomp
                            "ctx->vu0_r = _mm_castsi128_ps(_mm_set1_epi32(static_cast<int32_t>(r))); ";
         if (inst.rt != 0)
         {
-            code += fmt::format("ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], ctx->vu0_r, {}); ",
+            code += fmt::format("PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], ctx->vu0_r, {})); ",
                                 inst.rt, inst.rt, codegen::vuMaskExpr(inst.vectorInfo.vectorField));
         }
         return code + "}";
@@ -246,7 +251,7 @@ namespace ps2recomp
         return fmt::format("{{ __m128 mul_res = PS2_VMUL(ctx->vu0_vf[{}], _mm_shuffle_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], {})); "
                            "__m128 res = PS2_VADD(ctx->vu0_acc, mul_res); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs, vft, vft, shuffle_pattern,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -266,7 +271,7 @@ namespace ps2recomp
         return fmt::format("{{ __m128 mul_res = PS2_VMUL(ctx->vu0_vf[{}], _mm_shuffle_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], {})); "
                            "__m128 res = PS2_VSUB(ctx->vu0_acc, mul_res); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs, vft, vft, shuffle_pattern,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -285,7 +290,7 @@ namespace ps2recomp
 
         return fmt::format("{{ __m128 res = _mm_min_ps(ctx->vu0_vf[{}], _mm_shuffle_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], {})); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs, vft, vft, shuffle_pattern,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -304,7 +309,7 @@ namespace ps2recomp
 
         return fmt::format("{{ __m128 res = _mm_max_ps(ctx->vu0_vf[{}], _mm_shuffle_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], {})); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs, vft, vft, shuffle_pattern,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -320,7 +325,7 @@ namespace ps2recomp
         return fmt::format("{{ __m128 mul_res = PS2_VMUL(ctx->vu0_vf[{}], ctx->vu0_vf[{}]); "
                            "__m128 res = PS2_VADD(ctx->vu0_acc, mul_res); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs, vft,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -335,7 +340,7 @@ namespace ps2recomp
         return fmt::format("{{ __m128 mul_res = PS2_VMUL(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_q)); "
                            "__m128 res = PS2_VADD(ctx->vu0_acc, mul_res); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -350,7 +355,7 @@ namespace ps2recomp
         return fmt::format("{{ __m128 mul_res = PS2_VMUL(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_i)); "
                            "__m128 res = PS2_VADD(ctx->vu0_acc, mul_res); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -365,7 +370,7 @@ namespace ps2recomp
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = _mm_max_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}]); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs, vft,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -379,7 +384,7 @@ namespace ps2recomp
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = _mm_max_ps(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_i)); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -393,7 +398,7 @@ namespace ps2recomp
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = _mm_min_ps(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_i)); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -407,7 +412,7 @@ namespace ps2recomp
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = PS2_VMUL(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_i)); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -421,7 +426,7 @@ namespace ps2recomp
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = PS2_VMUL(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_q)); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -439,7 +444,7 @@ namespace ps2recomp
                            "__m128 mul_res = PS2_VMUL(fs_yzx, ft_zxy); "
                            "__m128 res = PS2_VSUB(ctx->vu0_acc, mul_res); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs, vfs, vft, vft,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -453,7 +458,7 @@ namespace ps2recomp
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = PS2_VADD(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_q)); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -467,7 +472,7 @@ namespace ps2recomp
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = PS2_VADD(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_i)); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -483,7 +488,7 @@ namespace ps2recomp
         return fmt::format("{{ __m128 mul_res = PS2_VMUL(ctx->vu0_vf[{}], ctx->vu0_vf[{}]); "
                            "__m128 res = PS2_VSUB(ctx->vu0_acc, mul_res); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs, vft,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -498,7 +503,7 @@ namespace ps2recomp
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = _mm_min_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}]); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs, vft,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -512,7 +517,7 @@ namespace ps2recomp
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = PS2_VSUB(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_i)); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -526,7 +531,7 @@ namespace ps2recomp
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = PS2_VSUB(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_q)); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -541,7 +546,7 @@ namespace ps2recomp
         return fmt::format("{{ __m128 mul_res = PS2_VMUL(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_q)); "
                            "__m128 res = PS2_VSUB(ctx->vu0_acc, mul_res); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -556,7 +561,7 @@ namespace ps2recomp
         return fmt::format("{{ __m128 mul_res = PS2_VMUL(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_i)); "
                            "__m128 res = PS2_VSUB(ctx->vu0_acc, mul_res); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs,
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -777,7 +782,7 @@ namespace ps2recomp
                            "__m128 res = _mm_cvtepi32_ps(src); "
                            "res = _mm_mul_ps(res, _mm_set1_ps({})); "
                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask))); }}",
                            vfs, codegen::formatFloatLiteral(scale),
                            (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                            (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
@@ -794,7 +799,7 @@ namespace ps2recomp
         return fmt::format("{{ const __m128 src = _mm_mul_ps(ctx->vu0_vf[{}], _mm_set1_ps({})); "
                            "const __m128i positiveOverflow = _mm_andnot_si128(_mm_srai_epi32(_mm_castps_si128(src), 31), _mm_castps_si128(_mm_cmpnlt_ps(src, _mm_set1_ps(2147483648.0f)))); "
                            "const __m128 res = _mm_castsi128_ps(_mm_xor_si128(_mm_cvttps_epi32(src), positiveOverflow)); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, {}); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, {})); }}",
                            inst.rd, codegen::formatFloatLiteral(scale), inst.rt, inst.rt, codegen::vuMaskExpr(inst.vectorInfo.vectorField));
     }
 
@@ -810,7 +815,7 @@ namespace ps2recomp
             if (ft != 0)
             {
                 code += fmt::format("__m128 res; std::memcpy(&res, runtime->memory().getVU0Data() + ((static_cast<uint32_t>(ctx->vi[{}]) & 0xFFu) << 4), sizeof(res)); "
-                                    "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, {}); ",
+                                    "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, {})); ",
                                     is, ft, ft, codegen::vuMaskExpr(destMask));
             }
             if (postIncrement && is != 0)
@@ -869,7 +874,7 @@ namespace ps2recomp
             return "{ }";
         }
         return fmt::format("{{ const __m128 res = _mm_castsi128_ps(_mm_shuffle_epi32(_mm_castps_si128(ctx->vu0_r), 0)); "
-                           "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, {}); }}",
+                           "PS2_VU0_VF_WRITE(ctx, {}, _mm_blendv_ps(ctx->vu0_vf[{}], res, {})); }}",
                            inst.rt, inst.rt, codegen::vuMaskExpr(inst.vectorInfo.vectorField));
     }
 
