@@ -49,8 +49,8 @@ The game's MIPS R5900 code is statically recompiled to C++ and run on a reimplem
 ## Goal
 
 A **fully playable** Persona 3 FES, covering *The Journey* and *The Answer* from the opening movie to the credits,
-as a native executable. Accuracy comes first, with PCSX2 as the reference. Once the game is playable, the port adds
-widescreen, higher internal resolution and 60 FPS with frame interpolation.
+as a native executable. Accuracy comes first, with PCSX2 as the reference. Once the game is playable, the port hopes
+to add widescreen, higher internal resolution and 60 FPS with frame interpolation.
 
 ## How it works
 
