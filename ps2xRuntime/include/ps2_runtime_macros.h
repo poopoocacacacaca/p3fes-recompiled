@@ -13,6 +13,14 @@
 #endif
 
 #include "ps2_runtime.h"
+// VU0 VF0 is a constant register. Evaluate the destination once and skip the
+// value expression for VF0 so generated instruction side effects stay intact.
+#define PS2_VU0_VF_WRITE(ctx, reg, value) \
+    do { \
+        const uint8_t ps2_vf_write_reg = static_cast<uint8_t>(reg); \
+        if (ps2_vf_write_reg != 0) \
+            (ctx)->vu0_vf[ps2_vf_write_reg] = (value); \
+    } while (false)
 
 static inline int32_t Ps2ExtractEpi32(__m128i v, int index)
 {
@@ -140,9 +148,242 @@ static inline uint32_t ps2_plzcw32(uint32_t x)
 #define PS2_PXOR(a, b) _mm_xor_si128((__m128i)(a), (__m128i)(b))
 #define PS2_PNOR(a, b) _mm_xor_si128(_mm_or_si128((__m128i)(a), (__m128i)(b)), _mm_set1_epi32(0xFFFFFFFF))
 
-// PS2 FPU (COP1) and VU0 macro-mode semantics: no NaNs or infinities (results saturate to the largest finite
-// value), add/subtract without guard bits, division and roots set FCR31 flags, and comparisons work on the bit
-// pattern. Taken from the Shadow of the Colossus port (TaylorNAlbarnaz/PS2Recomp, sotc-port branch: 8b51cb9,
+// PS2 float semantics (EE FPU and VU0 macro mode). The PS2 format has no Inf, NaN or denormals:
+//   - exponent 255 is an ordinary exponent, so 0x7F800000 is 2^128 and the largest value is 0x7FFFFFFF;
+//   - exponent 0 is zero whatever the mantissa holds;
+//   - a result of 2^129 or more saturates to +-0x7FFFFFFF, one below 2^-126 becomes +-0;
+//   - x/0 gives +-0x7FFFFFFF.
+// A host float cannot hold the exponent-255 values, so anything that touches them is computed in double.
+// That path is rare and kept out of line; the inline part is the host operation and a range check.
+// One case is left to the host: ADD.S/SUB.S/MUL.S and the vector operations do not look for an operand with
+// exponent 0 and a non-zero mantissa, so it takes part with its tiny host value instead of as zero.
+// Checked against the hardware results in ps2autotests (tests/cpu/ee_fpu).
+#if defined(_MSC_VER)
+#define PS2_FLOAT_NOINLINE __declspec(noinline)
+#else
+#define PS2_FLOAT_NOINLINE __attribute__((noinline))
+#endif
+
+constexpr uint32_t PS2_FLOAT_MAX_BITS = 0x7FFFFFFFu;
+constexpr uint32_t PS2_FLOAT_EXP_MASK = 0x7F800000u;
+constexpr uint32_t PS2_FLOAT_SIGN_MASK = 0x80000000u;
+
+// True when a host float operation cannot be trusted with x: exponent 255, or exponent 0 with a mantissa.
+inline bool ps2_fspecial(float x)
+{
+    const uint32_t t = std::bit_cast<uint32_t>(x) & 0x7FFFFFFFu;
+    return t != 0u && (t - 0x00800000u) >= 0x7F000000u;
+}
+
+inline double ps2_to_double(float x)
+{
+    uint32_t b = std::bit_cast<uint32_t>(x);
+    const uint32_t exponent = b & PS2_FLOAT_EXP_MASK;
+    if (exponent == 0u)
+        return static_cast<double>(std::bit_cast<float>(b & PS2_FLOAT_SIGN_MASK));
+    if (exponent == PS2_FLOAT_EXP_MASK)
+        return static_cast<double>(std::bit_cast<float>(b - 0x00800000u)) * 2.0;
+    return static_cast<double>(x);
+}
+
+inline float ps2_from_double(double d)
+{
+    const double magnitude = std::fabs(d);
+    const uint32_t sign = std::signbit(d) ? PS2_FLOAT_SIGN_MASK : 0u;
+    if (magnitude >= 0x1p129)
+        return std::bit_cast<float>(sign | PS2_FLOAT_MAX_BITS);
+    if (magnitude < 0x1p-126)
+        return std::bit_cast<float>(sign);
+    if (magnitude >= 0x1p128)
+    {
+        // Convert one exponent lower, then put the exponent back as 255.
+        const uint32_t b = std::bit_cast<uint32_t>(static_cast<float>(d * 0.5));
+        if ((b & PS2_FLOAT_EXP_MASK) == PS2_FLOAT_EXP_MASK)
+            return std::bit_cast<float>(sign | PS2_FLOAT_MAX_BITS);
+        return std::bit_cast<float>(b + 0x00800000u);
+    }
+    // A value that rounds up to 2^128 comes out as the host's Inf pattern, which is 2^128 on the PS2.
+    return static_cast<float>(d);
+}
+
+PS2_FLOAT_NOINLINE inline float ps2_fadd_slow(float a, float b)
+{
+    // Zero operands and results end up here too; the host result is right for them.
+    const float r = a + b;
+    if (!(ps2_fspecial(a) | ps2_fspecial(b) | ps2_fspecial(r)))
+        return r;
+    return ps2_from_double(ps2_to_double(a) + ps2_to_double(b));
+}
+
+PS2_FLOAT_NOINLINE inline float ps2_fsub_slow(float a, float b)
+{
+    // Zero operands and results end up here too; the host result is right for them.
+    const float r = a - b;
+    if (!(ps2_fspecial(a) | ps2_fspecial(b) | ps2_fspecial(r)))
+        return r;
+    return ps2_from_double(ps2_to_double(a) - ps2_to_double(b));
+}
+
+PS2_FLOAT_NOINLINE inline float ps2_fmul_slow(float a, float b)
+{
+    // Zero operands and results end up here too; the host result is right for them.
+    const float r = a * b;
+    if (!(ps2_fspecial(a) | ps2_fspecial(b) | ps2_fspecial(r)))
+        return r;
+    return ps2_from_double(ps2_to_double(a) * ps2_to_double(b));
+}
+
+// A zero divisor gives +-max with the sign of fs xor ft.
+PS2_FLOAT_NOINLINE inline float ps2_fdiv_slow(float a, float b)
+{
+    const uint32_t ua = std::bit_cast<uint32_t>(a);
+    const uint32_t ub = std::bit_cast<uint32_t>(b);
+    if ((ub & PS2_FLOAT_EXP_MASK) == 0u)
+        return std::bit_cast<float>(((ua ^ ub) & PS2_FLOAT_SIGN_MASK) | PS2_FLOAT_MAX_BITS);
+    const float r = a / b;
+    if (!(ps2_fspecial(a) | ps2_fspecial(b) | ps2_fspecial(r)))
+        return r;
+    return ps2_from_double(ps2_to_double(a) / ps2_to_double(b));
+}
+
+// sqrt(|ft|); the result is never negative, sqrt(-0) is +0.
+PS2_FLOAT_NOINLINE inline float ps2_fsqrt_slow(float a)
+{
+    if ((std::bit_cast<uint32_t>(a) & PS2_FLOAT_EXP_MASK) == 0u)
+        return 0.0f;
+    return ps2_from_double(std::sqrt(std::fabs(ps2_to_double(a))));
+}
+
+// fs / sqrt(|ft|). The sign of ft is ignored everywhere, so a zero ft gives +-max with the sign of fs alone.
+PS2_FLOAT_NOINLINE inline float ps2_frsqrt_slow(float a, float b)
+{
+    if ((std::bit_cast<uint32_t>(b) & PS2_FLOAT_EXP_MASK) == 0u)
+        return std::bit_cast<float>((std::bit_cast<uint32_t>(a) & PS2_FLOAT_SIGN_MASK) | PS2_FLOAT_MAX_BITS);
+    // The root is rounded to a float before the division, as on the hardware.
+    const float root = ps2_from_double(std::sqrt(std::fabs(ps2_to_double(b))));
+    return ps2_from_double(ps2_to_double(a) / static_cast<double>(root));
+}
+
+// True when a, b and the host result r are all normal numbers, so r is also the PS2 result.
+inline bool ps2_fall_normal(float a, float b, float r)
+{
+    // Doubling drops the sign; adding one exponent step wraps exponent 255 round to 0 next to exponent 0.
+    const uint32_t sa = std::bit_cast<uint32_t>(a) * 2u + 0x01000000u;
+    const uint32_t sb = std::bit_cast<uint32_t>(b) * 2u + 0x01000000u;
+    const uint32_t sr = std::bit_cast<uint32_t>(r) * 2u + 0x01000000u;
+    uint32_t lowest = sa < sb ? sa : sb;
+    lowest = lowest < sr ? lowest : sr;
+    return lowest >= 0x02000000u;
+}
+
+// The same test on the result alone. An exponent-255 operand always leaves exponent 255 in the host result
+// of an addition, subtraction or multiplication (Inf or NaN), so this finds those operands as well.
+inline bool ps2_fnormal(float r)
+{
+    return (std::bit_cast<uint32_t>(r) * 2u + 0x01000000u) >= 0x02000000u;
+}
+
+inline float ps2_fadd(float a, float b)
+{
+    const float r = a + b;
+    return ps2_fnormal(r) ? r : ps2_fadd_slow(a, b);
+}
+
+inline float ps2_fsub(float a, float b)
+{
+    const float r = a - b;
+    return ps2_fnormal(r) ? r : ps2_fsub_slow(a, b);
+}
+
+inline float ps2_fmul(float a, float b)
+{
+    const float r = a * b;
+    return ps2_fnormal(r) ? r : ps2_fmul_slow(a, b);
+}
+
+inline float ps2_fdiv(float a, float b)
+{
+    const float r = a / b;
+    return ps2_fall_normal(a, b, r) ? r : ps2_fdiv_slow(a, b);
+}
+
+inline float ps2_fsqrt(float a)
+{
+    const float r = std::sqrt(a);
+    return ps2_fall_normal(a, a, r) ? r : ps2_fsqrt_slow(a);
+}
+
+inline float ps2_frsqrt(float a, float b)
+{
+    const float r = a / std::sqrt(b);
+    return ps2_fall_normal(a, b, r) ? r : ps2_frsqrt_slow(a, b);
+}
+
+enum class Ps2VecOp
+{
+    Add,
+    Sub,
+    Mul
+};
+
+// Lane by lane through the scalar helpers; only reached when a result lane has exponent 255.
+PS2_FLOAT_NOINLINE inline __m128 ps2_vslow(__m128 a, __m128 b, Ps2VecOp op)
+{
+    alignas(16) float la[4], lb[4], lr[4];
+    _mm_store_ps(la, a);
+    _mm_store_ps(lb, b);
+    for (int i = 0; i < 4; ++i)
+    {
+        switch (op)
+        {
+        case Ps2VecOp::Add:
+            lr[i] = ps2_fadd_slow(la[i], lb[i]);
+            break;
+        case Ps2VecOp::Sub:
+            lr[i] = ps2_fsub_slow(la[i], lb[i]);
+            break;
+        default:
+            lr[i] = ps2_fmul_slow(la[i], lb[i]);
+            break;
+        }
+    }
+    return _mm_load_ps(lr);
+}
+
+// r is the host result of a op b. As in ps2_fnormal, testing r alone finds every lane that needs the double
+// path. Results with exponent 0 are flushed to +-0.
+inline __m128 ps2_vfinish(__m128 a, __m128 b, __m128 r, Ps2VecOp op)
+{
+    const __m128i expMask = _mm_set1_epi32(0x7F800000);
+    const __m128i rexp = _mm_and_si128(_mm_castps_si128(r), expMask);
+    if (_mm_movemask_epi8(_mm_cmpeq_epi32(rexp, expMask)) != 0)
+        return ps2_vslow(a, b, op);
+    const __m128i flush = _mm_and_si128(_mm_cmpeq_epi32(rexp, _mm_setzero_si128()), _mm_set1_epi32(0x7FFFFFFF));
+    return _mm_castsi128_ps(_mm_andnot_si128(flush, _mm_castps_si128(r)));
+}
+
+inline __m128 ps2_vadd(__m128 a, __m128 b)
+{
+    return ps2_vfinish(a, b, _mm_add_ps(a, b), Ps2VecOp::Add);
+}
+
+inline __m128 ps2_vsub(__m128 a, __m128 b)
+{
+    return ps2_vfinish(a, b, _mm_sub_ps(a, b), Ps2VecOp::Sub);
+}
+
+inline __m128 ps2_vmul(__m128 a, __m128 b)
+{
+    return ps2_vfinish(a, b, _mm_mul_ps(a, b), Ps2VecOp::Mul);
+}
+
+// PS2 VU (Vector Unit) operations
+#define PS2_VADD(a, b) ps2_vadd((__m128)(a), (__m128)(b))
+#define PS2_VSUB(a, b) ps2_vsub((__m128)(a), (__m128)(b))
+#define PS2_VMUL(a, b) ps2_vmul((__m128)(a), (__m128)(b))
+
+// FCR31 flags for DIV.S, SQRT.S and RSQRT.S (values from the PS2 float helpers above), VU0 macro-mode clamping and
+// bit-pattern comparisons. Taken from the Shadow of the Colossus port (TaylorNAlbarnaz/PS2Recomp, sotc-port branch: 8b51cb9,
 // 9bb389e, c419f26).
 inline __m128 ps2VuClampVector(__m128 value)
 {
@@ -186,14 +427,12 @@ inline void ps2FpuAlignOperands(float &a, float &b)
 
 inline float ps2FpuAdd(float a, float b)
 {
-    ps2FpuAlignOperands(a, b);
-    return ps2FpuClamp(a + b);
+    return ps2_fadd(a, b);
 }
 
 inline float ps2FpuSub(float a, float b)
 {
-    ps2FpuAlignOperands(a, b);
-    return ps2FpuClamp(a - b);
+    return ps2_fsub(a, b);
 }
 
 inline float ps2SignedFloatMax(uint32_t signSource)
@@ -255,28 +494,24 @@ inline float ps2FpuDivide(uint32_t &fcr31, float dividend, float divisor)
             fcr31 |= PS2_FCR31_I | PS2_FCR31_SI;
         else
             fcr31 |= PS2_FCR31_D | PS2_FCR31_SD;
-        return ps2SignedFloatMax(ps2FloatBits(dividend) ^ ps2FloatBits(divisor));
     }
-    return ps2FpuClamp(ps2FpuDivideNearest(dividend, divisor));
+    return ps2_fdiv(dividend, divisor);
 }
 
 inline float ps2FpuSqrt(uint32_t &fcr31, float value)
 {
     if ((ps2FloatBits(value) & 0x80000000u) != 0u && !ps2FloatIsZero(value))
         fcr31 |= PS2_FCR31_I | PS2_FCR31_SI;
-    return ps2FpuClamp(ps2FpuSqrtNearest(std::fabs(value)));
+    return ps2_fsqrt(value);
 }
 
 inline float ps2FpuRsqrt(uint32_t &fcr31, float numerator, float value)
 {
     if (ps2FloatIsZero(value))
-    {
         fcr31 |= PS2_FCR31_D | PS2_FCR31_SD;
-        return ps2SignedFloatMax(ps2FloatBits(numerator) ^ ps2FloatBits(value));
-    }
-    if ((ps2FloatBits(value) & 0x80000000u) != 0u)
+    else if ((ps2FloatBits(value) & 0x80000000u) != 0u)
         fcr31 |= PS2_FCR31_I | PS2_FCR31_SI;
-    return ps2FpuClamp(ps2FpuDivideNearest(numerator, ps2FpuSqrtNearest(std::fabs(value))));
+    return ps2_frsqrt(numerator, value);
 }
 
 inline int32_t ps2FpuConvertToWord(float value)
@@ -876,11 +1111,12 @@ inline __m128i ps2_pmfhl_sh(uint64_t hi, uint64_t lo, uint64_t hi1, uint64_t lo1
 
 // FPU (COP1) operations
 #define FPU_SET_ACC(ctx, res) (ctx->f_acc = res)
-#define FPU_ADD_S(a, b) ps2FpuAdd((float)(a), (float)(b))
-#define FPU_SUB_S(a, b) ps2FpuSub((float)(a), (float)(b))
-#define FPU_MUL_S(a, b) ps2FpuClamp((float)(a) * (float)(b))
-#define FPU_DIV_S(a, b) ps2FpuClamp((float)(a) / (float)(b))
-#define FPU_SQRT_S(a) ps2FpuClamp(std::sqrt(std::fabs((float)(a))))
+#define FPU_ADD_S(a, b) ps2_fadd((float)(a), (float)(b))
+#define FPU_SUB_S(a, b) ps2_fsub((float)(a), (float)(b))
+#define FPU_MUL_S(a, b) ps2_fmul((float)(a), (float)(b))
+#define FPU_DIV_S(a, b) ps2_fdiv((float)(a), (float)(b))
+#define FPU_RSQRT_S(a, b) ps2_frsqrt((float)(a), (float)(b))
+#define FPU_SQRT_S(a) ps2_fsqrt((float)(a))
 #define FPU_ABS_S(a) fabsf((float)(a))
 #define FPU_MOV_S(a) ((float)(a))
 #define FPU_NEG_S(a) (-(float)(a))

@@ -40,8 +40,15 @@ bounds = sorted(set(s) | {lo for lo, hi in DATA_RANGES})
 overlay = {}
 if overlay_path:
     taken = set(names.values())
+    # Names the runtime binds to HLE implementations (ps2_call_list.h X(...) entries) would change behaviour,
+    # not just the name, so the overlay never introduces them.
+    import pathlib
+    call_list = pathlib.Path(__file__).resolve().parents[2] / 'ps2xRuntime' / 'include' / 'ps2_call_list.h'
+    reserved = set(re.findall(r'X\(\s*([A-Za-z_]\w*)\s*\)', call_list.read_text())) if call_list.exists() else set()
     for row in csv.DictReader(open(overlay_path)):
-        if row['confidence'] != 'anchored':
+        pn = row['p4_name']
+        # The runtime also matches a stub name with one leading underscore added or removed.
+        if row['confidence'] != 'anchored' or pn in reserved or '_' + pn in reserved or (pn.startswith('_') and pn[1:] in reserved):
             continue
         a = int(row['p3_address'], 16)
         n = row['p4_name'] if row['p4_name'] not in taken else '%s_%08x' % (row['p4_name'], a)
