@@ -1,3 +1,5 @@
+#include <utility>
+#include <string>
 #include "runtime/ee_scheduler.h"
 
 #include "ps2_log.h"
@@ -2107,6 +2109,26 @@ void EeScheduler::processEvent(const EeEvent &event)
         }
         // registers consistent from the EE before waking game callbacks.
         m_runtime.gs().notifyExternalVSync(m_vsyncTick, static_cast<uint32_t>(m_vsyncTick & 1u));
+        // Debug aid: PS2X_RAM_DUMP=<field>:<path> writes the 32 MB of EE RAM to <path> at that vsync.
+        {
+            static const std::pair<uint64_t, std::string> ramDump = []() -> std::pair<uint64_t, std::string>
+            {
+                const char *v = std::getenv("PS2X_RAM_DUMP");
+                if (!v || !std::strchr(v, ':'))
+                    return {0u, {}};
+                return {std::strtoull(v, nullptr, 10), std::string(std::strchr(v, ':') + 1)};
+            }();
+            if (ramDump.first != 0u && m_vsyncTick == ramDump.first && m_rdram)
+            {
+                if (std::FILE *f = std::fopen(ramDump.second.c_str(), "wb"))
+                {
+                    std::fwrite(m_rdram, 1, PS2_RAM_SIZE, f);
+                    std::fclose(f);
+                    std::fprintf(stderr, "[ram-dump] field %llu -> %s\n", (unsigned long long)m_vsyncTick,
+                                 ramDump.second.c_str());
+                }
+            }
+        }
         writeGuestU32(m_vsyncFlagAddress, 1u);
         if (m_vsyncTickAddress != 0u)
         {

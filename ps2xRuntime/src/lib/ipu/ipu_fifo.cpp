@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
 // SPDX-License-Identifier: GPL-3.0+
 
+#include <cstdio>
+#include <cstdlib>
+
 #include "ipu_compat.h"
 #include "IPU.h"
 #include "IPUdma.h"
@@ -67,6 +70,15 @@ int IPU_Fifo_Input::write(const u32* pMem, int size)
 	const int first_words = std::min((32 - writepos), transfer_size << 2);
 	const int second_words = (transfer_size << 2) - first_words;
 
+	// Debug aid: PS2X_IPU_DUMP=<path> appends every qword that enters the IPU input FIFO.
+	{
+		static std::FILE* dump = []() -> std::FILE* {
+			const char* path = std::getenv("PS2X_IPU_DUMP");
+			return path && *path ? std::fopen(path, "wb") : nullptr;
+		}();
+		if (dump)
+			std::fwrite(pMem, 4, transfer_size << 2, dump);
+	}
 	memcpy(&data[writepos], pMem, first_words << 2);
 	pMem += first_words;
 

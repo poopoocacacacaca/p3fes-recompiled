@@ -77,6 +77,196 @@ namespace
         return v && *v ? v : fallback;
     }
 
+    // Debug aid: PS2X_GIF_TRACE=<file> logs, from field PS2X_GIF_TRACE_FROM (default 0) for PS2X_GIF_TRACE_FIELDS
+    // fields (default 4), the GIF tags per PATH with the texture, transfer and frame registers they set, image
+    // transfer sizes and vertex counts: enough to see which upload a draw samples and in what order paths arrive.
+    class GifTracer
+    {
+    public:
+        GifTracer()
+        {
+            const char *path = std::getenv("PS2X_GIF_TRACE");
+            if (!path || !*path)
+                return;
+            m_file = std::fopen(path, "w");
+            if (const char *v = std::getenv("PS2X_GIF_TRACE_FROM"))
+                m_from = std::strtoull(v, nullptr, 10);
+            if (const char *v = std::getenv("PS2X_GIF_TRACE_FIELDS"))
+                m_count = std::strtoull(v, nullptr, 10);
+        }
+        bool active() const { return m_file && m_field >= m_from && m_field < m_from + m_count; }
+
+        void vsync(uint64_t field, const GSRegisters &r)
+        {
+            if (m_file)
+                std::fflush(m_file);
+            if (m_file && field % 100 == 0)
+            {
+                std::fprintf(stderr, "[gif-trace] field %llu bytes P1=%llu P2=%llu P3=%llu\n", (unsigned long long)field,
+                             (unsigned long long)m_bytes[1], (unsigned long long)m_bytes[2], (unsigned long long)m_bytes[3]);
+                m_bytes[1] = m_bytes[2] = m_bytes[3] = 0;
+            }
+            m_field = field;
+            if (active())
+                std::fprintf(m_file, "=== field %llu dispfb1=%016llx dispfb2=%016llx pmode=%llx\n",
+                             (unsigned long long)field, (unsigned long long)r.dispfb1,
+                             (unsigned long long)r.dispfb2, (unsigned long long)r.pmode);
+        }
+
+        void reg(uint8_t a, uint64_t v, const char *src)
+        {
+            if (!active())
+                return;
+            switch (a)
+            {
+            case 0x06: case 0x07:
+                std::fprintf(m_file, "  %s TEX0_%d tbp=%05llx tbw=%llu psm=%02llx tw=%llu th=%llu cbp=%05llx cpsm=%llx\n", src,
+                             a - 5, (unsigned long long)(v & 0x3FFF) * 64 / 64, (unsigned long long)((v >> 14) & 63),
+                             (unsigned long long)((v >> 20) & 63), 1ull << ((v >> 26) & 15), 1ull << ((v >> 30) & 15),
+                             (unsigned long long)((v >> 37) & 0x3FFF), (unsigned long long)((v >> 51) & 15));
+                break;
+            case 0x4C: case 0x4D:
+                std::fprintf(m_file, "  %s FRAME_%d fbp=%03llx fbw=%llu psm=%02llx mask=%08llx\n", src, a - 0x4B,
+                             (unsigned long long)(v & 0x1FF), (unsigned long long)((v >> 16) & 63),
+                             (unsigned long long)((v >> 24) & 63), (unsigned long long)(v >> 32));
+                break;
+            case 0x50:
+                std::fprintf(m_file, "  %s BITBLTBUF sbp=%04llx sbw=%llu spsm=%02llx dbp=%04llx dbw=%llu dpsm=%02llx\n", src,
+                             (unsigned long long)(v & 0x3FFF), (unsigned long long)((v >> 16) & 63),
+                             (unsigned long long)((v >> 24) & 63), (unsigned long long)((v >> 32) & 0x3FFF),
+                             (unsigned long long)((v >> 48) & 63), (unsigned long long)((v >> 56) & 63));
+                break;
+            case 0x51:
+                std::fprintf(m_file, "  %s TRXPOS dst=%llu,%llu\n", src, (unsigned long long)((v >> 32) & 0x7FF),
+                             (unsigned long long)((v >> 48) & 0x7FF));
+                break;
+            case 0x52:
+                std::fprintf(m_file, "  %s TRXREG %llux%llu\n", src, (unsigned long long)(v & 0xFFF),
+                             (unsigned long long)((v >> 32) & 0xFFF));
+                break;
+            case 0x53:
+                std::fprintf(m_file, "  %s TRXDIR %llu\n", src, (unsigned long long)(v & 3));
+                break;
+            case 0x00:
+                flushVerts(src);
+                std::fprintf(m_file, "  %s PRIM type=%llu tme=%llu abe=%llu fst=%llu ctxt=%llu\n", src,
+                             (unsigned long long)(v & 7), (unsigned long long)((v >> 4) & 1),
+                             (unsigned long long)((v >> 6) & 1), (unsigned long long)((v >> 8) & 1),
+                             (unsigned long long)((v >> 9) & 1));
+                break;
+            case 0x04: case 0x05: case 0x0C: case 0x0D:
+                if (m_verts++ == 0)
+                    m_firstXY = v;
+                m_lastXY = v;
+                break;
+            default:
+                break;
+            }
+        }
+
+        void gif(int path, const uint8_t *data, uint32_t size)
+        {
+            if (!m_file)
+                return;
+            m_bytes[path & 3] += size;
+            char src[8];
+            std::snprintf(src, sizeof(src), "P%d", path);
+            State &st = m_state[path & 3];
+            for (uint32_t off = 0; off + 16 <= size; off += 16)
+            {
+                uint64_t lo, hi;
+                std::memcpy(&lo, data + off, 8);
+                std::memcpy(&hi, data + off + 8, 8);
+                if (st.loops == 0)
+                {
+                    st.loops = lo & 0x7FFF;
+                    st.flg = (lo >> 58) & 3;
+                    st.nreg = (lo >> 60) & 15;
+                    if (st.nreg == 0)
+                        st.nreg = 16;
+                    st.regs = hi;
+                    st.index = 0;
+                    st.regListHalf = false;
+                    if (active() || (path == 3 && m_p3tags++ < 200))
+                        std::fprintf(m_file, " %s tag nloop=%u flg=%u nreg=%u eop=%u%s [%016llx %016llx] span=%u off=%u\n", src, st.loops, st.flg, st.nreg,
+                                     (unsigned)((lo >> 15) & 1), (lo >> 46) & 1 ? " pre" : "", (unsigned long long)hi,
+                                     (unsigned long long)lo, size, off);
+                    if ((lo >> 46) & 1)
+                        reg(0x00, (lo >> 47) & 0x7FF, src);
+                    if (st.flg == 2 && st.loops && active())
+                        std::fprintf(m_file, "  %s IMAGE %u qw\n", src, st.loops);
+                    if (st.flg == 2)
+                    {
+                        // Image data: skip it whole (it may continue in the next span).
+                        st.imageLeft = st.loops;
+                        st.loops = 0;
+                    }
+                    continue;
+                }
+                if (st.imageLeft)
+                {
+                    --st.imageLeft;
+                    continue;
+                }
+                if (st.flg == 0)
+                {
+                    const uint32_t r = (st.regs >> (4 * st.index)) & 15;
+                    if (r == 0xE)
+                        reg(static_cast<uint8_t>(hi & 0xFF), lo, src);
+                    else if (r == 0x0)
+                        reg(0x00, lo, src);
+                    else if (r == 0x6 || r == 0x7)
+                        reg(static_cast<uint8_t>(r), lo, src);
+                    else if (r == 0x4 || r == 0x5 || r == 0xC || r == 0xD)
+                        reg(static_cast<uint8_t>(r), lo, src);
+                    advance(st);
+                }
+                else if (st.flg == 1)
+                {
+                    for (int h = 0; h < 2 && st.loops; ++h)
+                    {
+                        const uint32_t r = (st.regs >> (4 * st.index)) & 15;
+                        reg(static_cast<uint8_t>(r), h ? hi : lo, src);
+                        advance(st);
+                    }
+                }
+            }
+        }
+
+        void flushVerts(const char *src)
+        {
+            if (m_verts && active())
+                std::fprintf(m_file, "  %s   %u vertices first=(%llu,%llu) last=(%llu,%llu)\n", src, m_verts,
+                             (unsigned long long)((m_firstXY & 0xFFFF) >> 4), (unsigned long long)(((m_firstXY >> 16) & 0xFFFF) >> 4),
+                             (unsigned long long)((m_lastXY & 0xFFFF) >> 4), (unsigned long long)(((m_lastXY >> 16) & 0xFFFF) >> 4));
+            m_verts = 0;
+        }
+
+    private:
+        struct State
+        {
+            uint32_t loops = 0, flg = 0, nreg = 0, index = 0, imageLeft = 0;
+            uint64_t regs = 0;
+            bool regListHalf = false;
+        };
+        void advance(State &st)
+        {
+            if (++st.index >= st.nreg)
+            {
+                st.index = 0;
+                if (st.loops)
+                    --st.loops;
+            }
+        }
+        std::FILE *m_file = nullptr;
+        uint64_t m_from = 0, m_count = 4, m_field = 0;
+        State m_state[4];
+        uint64_t m_bytes[4] = {};
+        uint32_t m_p3tags = 0;
+        uint32_t m_verts = 0;
+        uint64_t m_firstXY = 0, m_lastXY = 0;
+    };
+
     class Pcsx2Renderer final : public GSExternalObserver
     {
     public:
@@ -114,11 +304,13 @@ namespace
             const uint32_t bytes = size & ~15u;
             if (!data || !bytes)
                 return;
+            m_tracer.gif(static_cast<int>(path), data, bytes);
             Append(Rec::Gif, static_cast<uint8_t>(path), data, bytes);
         }
 
         void reg(uint8_t address, uint64_t value) noexcept override
         {
+            m_tracer.reg(address, value, "direct");
             // A one-register A+D packet on PCSX2's otherwise unused merged-stream path.
             uint64_t packet[4];
             packet[0] = 1ull | (1ull << 15) | (0ull << 58) | (1ull << 60); // NLOOP 1, EOP, PACKED, NREG 1
@@ -128,8 +320,10 @@ namespace
             Append(Rec::Gif, 0u, packet, sizeof(packet));
         }
 
-        void vsync(const GSRegisters &r, uint64_t, uint32_t) noexcept override
+        void vsync(const GSRegisters &r, uint64_t tick, uint32_t) noexcept override
         {
+            m_tracer.flushVerts("");
+            m_tracer.vsync(tick, r);
             Pcsx2GsPrivRegs regs{};
             const uint64_t set1[15] = {r.pmode, r.smode1, r.smode2, r.srfsh, r.synch1, r.synch2, r.syncv, r.dispfb1,
                                        r.display1, r.dispfb2, r.display2, r.extbuf, r.extdata, r.extwrite, r.bgcolor};
@@ -283,6 +477,7 @@ namespace
             ++m_frameSerial;
         }
 
+        GifTracer m_tracer;
         const Pcsx2GsApi *m_api = nullptr;
         std::string m_resources, m_cache, m_options;
         uint32_t m_renderer = 0;
