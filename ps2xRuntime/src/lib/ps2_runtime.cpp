@@ -142,6 +142,8 @@ namespace
 }
 #endif
 
+void ps2PadLatchHostInput(); // ps2_pad.cpp
+
 namespace ps2_stubs
 {
     void resetSifState();
@@ -2737,6 +2739,7 @@ void PS2Runtime::run()
         });
         if (ps2_perf::countFrames()) ps2_perf::hostFrames.fetch_add(1, std::memory_order_relaxed);
         ps2_perf::report();
+        ps2PadLatchHostInput();
 
         if (WindowShouldClose())
         {

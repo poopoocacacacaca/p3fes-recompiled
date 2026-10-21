@@ -1,3 +1,4 @@
+#include <atomic>
 #include "runtime/ps2_pad.h"
 #include "ps2_host_backend.h"
 #include <cstring>
@@ -151,6 +152,85 @@ namespace
     }
 }
 
+namespace
+{
+    // Buttons (PAD_* bits, set = pressed) and sticks (RX, RY, LX, LY) of the host controller and keyboard now.
+    uint16_t hostPressedMask(uint8_t sticks[4])
+    {
+        uint16_t pressed = 0u;
+        const int gamepad = activeGamepad();
+
+        if (gamepad >= 0)
+        {
+            static const struct { int button; uint16_t mask; } kButtons[] = {
+                {GAMEPAD_BUTTON_LEFT_FACE_UP, PAD_UP},
+                {GAMEPAD_BUTTON_LEFT_FACE_DOWN, PAD_DOWN},
+                {GAMEPAD_BUTTON_LEFT_FACE_LEFT, PAD_LEFT},
+                {GAMEPAD_BUTTON_LEFT_FACE_RIGHT, PAD_RIGHT},
+                {GAMEPAD_BUTTON_RIGHT_FACE_DOWN, PAD_CROSS},
+                {GAMEPAD_BUTTON_RIGHT_FACE_RIGHT, PAD_CIRCLE},
+                {GAMEPAD_BUTTON_RIGHT_FACE_LEFT, PAD_SQUARE},
+                {GAMEPAD_BUTTON_RIGHT_FACE_UP, PAD_TRIANGLE},
+                {GAMEPAD_BUTTON_LEFT_TRIGGER_1, PAD_L1},
+                {GAMEPAD_BUTTON_RIGHT_TRIGGER_1, PAD_R1},
+                {GAMEPAD_BUTTON_LEFT_TRIGGER_2, PAD_L2},
+                {GAMEPAD_BUTTON_RIGHT_TRIGGER_2, PAD_R2},
+                {GAMEPAD_BUTTON_MIDDLE_RIGHT, PAD_START},
+                {GAMEPAD_BUTTON_MIDDLE_LEFT, PAD_SELECT},
+                {GAMEPAD_BUTTON_LEFT_THUMB, PAD_L3},
+                {GAMEPAD_BUTTON_RIGHT_THUMB, PAD_R3},
+            };
+            for (const auto &entry : kButtons)
+                if (IsGamepadButtonDown(gamepad, entry.button))
+                    pressed |= entry.mask;
+
+            // Analog triggers also count as L2/R2 on backends that only report the axis.
+            if (GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_TRIGGER) > 0.3f)
+                pressed |= PAD_L2;
+            if (GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_TRIGGER) > 0.3f)
+                pressed |= PAD_R2;
+
+            sticks[2] = stickByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_X));
+            sticks[3] = stickByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_Y));
+            sticks[0] = stickByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_X));
+            sticks[1] = stickByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_Y));
+        }
+
+        // Keyboard always works, also alongside a controller.
+        static const struct { int key; uint16_t mask; } kKeys[] = {
+            {KEY_UP, PAD_UP}, {KEY_W, PAD_UP},
+            {KEY_DOWN, PAD_DOWN}, {KEY_S, PAD_DOWN},
+            {KEY_LEFT, PAD_LEFT}, {KEY_A, PAD_LEFT},
+            {KEY_RIGHT, PAD_RIGHT}, {KEY_D, PAD_RIGHT},
+            {KEY_X, PAD_CROSS}, {KEY_SPACE, PAD_CROSS}, {KEY_K, PAD_CROSS},
+            {KEY_C, PAD_CIRCLE}, {KEY_ESCAPE, PAD_CIRCLE}, {KEY_L, PAD_CIRCLE},
+            {KEY_Z, PAD_SQUARE}, {KEY_KP_0, PAD_SQUARE}, {KEY_J, PAD_SQUARE},
+            {KEY_V, PAD_TRIANGLE}, {KEY_KP_1, PAD_TRIANGLE}, {KEY_I, PAD_TRIANGLE},
+            {KEY_Q, PAD_L1}, {KEY_E, PAD_R1},
+            {KEY_LEFT_SHIFT, PAD_L2}, {KEY_RIGHT_SHIFT, PAD_R2},
+            {KEY_ENTER, PAD_START}, {KEY_TAB, PAD_SELECT},
+            {KEY_ONE, PAD_L3}, {KEY_THREE, PAD_R3},
+        };
+        for (const auto &entry : kKeys)
+            if (IsKeyDown(entry.key))
+                pressed |= entry.mask;
+
+        return pressed;
+    }
+
+    std::atomic<uint16_t> g_latchedButtons{0u};
+}
+
+// Called once per host frame on the window thread (ps2_runtime.cpp): remembers every button seen down until the game's
+// next pad read, so a tap shorter than the game's polling interval (when emulation runs slow) is not lost.
+void ps2PadLatchHostInput()
+{
+    uint8_t sticks[4] = {kPadStickCenter, kPadStickCenter, kPadStickCenter, kPadStickCenter};
+    const uint16_t pressed = hostPressedMask(sticks);
+    if (pressed != 0u)
+        g_latchedButtons.fetch_or(pressed, std::memory_order_relaxed);
+}
+
 bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t size)
 {
     if (!data || size < 32)
@@ -163,63 +243,14 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     data[3] = 0xFF;
     data[4] = data[5] = data[6] = data[7] = kPadStickCenter;
 
-    uint16_t pressed = 0u;
-    const int gamepad = activeGamepad();
-
-    if (gamepad >= 0)
-    {
-        static const struct { int button; uint16_t mask; } kButtons[] = {
-            {GAMEPAD_BUTTON_LEFT_FACE_UP, PAD_UP},
-            {GAMEPAD_BUTTON_LEFT_FACE_DOWN, PAD_DOWN},
-            {GAMEPAD_BUTTON_LEFT_FACE_LEFT, PAD_LEFT},
-            {GAMEPAD_BUTTON_LEFT_FACE_RIGHT, PAD_RIGHT},
-            {GAMEPAD_BUTTON_RIGHT_FACE_DOWN, PAD_CROSS},
-            {GAMEPAD_BUTTON_RIGHT_FACE_RIGHT, PAD_CIRCLE},
-            {GAMEPAD_BUTTON_RIGHT_FACE_LEFT, PAD_SQUARE},
-            {GAMEPAD_BUTTON_RIGHT_FACE_UP, PAD_TRIANGLE},
-            {GAMEPAD_BUTTON_LEFT_TRIGGER_1, PAD_L1},
-            {GAMEPAD_BUTTON_RIGHT_TRIGGER_1, PAD_R1},
-            {GAMEPAD_BUTTON_LEFT_TRIGGER_2, PAD_L2},
-            {GAMEPAD_BUTTON_RIGHT_TRIGGER_2, PAD_R2},
-            {GAMEPAD_BUTTON_MIDDLE_RIGHT, PAD_START},
-            {GAMEPAD_BUTTON_MIDDLE_LEFT, PAD_SELECT},
-            {GAMEPAD_BUTTON_LEFT_THUMB, PAD_L3},
-            {GAMEPAD_BUTTON_RIGHT_THUMB, PAD_R3},
-        };
-        for (const auto &entry : kButtons)
-            if (IsGamepadButtonDown(gamepad, entry.button))
-                pressed |= entry.mask;
-
-        // Analog triggers also count as L2/R2 on backends that only report the axis.
-        if (GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_TRIGGER) > 0.3f)
-            pressed |= PAD_L2;
-        if (GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_TRIGGER) > 0.3f)
-            pressed |= PAD_R2;
-
-        data[6] = stickByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_X));
-        data[7] = stickByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_Y));
-        data[4] = stickByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_X));
-        data[5] = stickByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_Y));
-    }
-
-    // Keyboard always works, also alongside a controller.
-    static const struct { int key; uint16_t mask; } kKeys[] = {
-        {KEY_UP, PAD_UP}, {KEY_W, PAD_UP},
-        {KEY_DOWN, PAD_DOWN}, {KEY_S, PAD_DOWN},
-        {KEY_LEFT, PAD_LEFT}, {KEY_A, PAD_LEFT},
-        {KEY_RIGHT, PAD_RIGHT}, {KEY_D, PAD_RIGHT},
-        {KEY_X, PAD_CROSS}, {KEY_SPACE, PAD_CROSS}, {KEY_K, PAD_CROSS},
-        {KEY_C, PAD_CIRCLE}, {KEY_ESCAPE, PAD_CIRCLE}, {KEY_L, PAD_CIRCLE},
-        {KEY_Z, PAD_SQUARE}, {KEY_KP_0, PAD_SQUARE}, {KEY_J, PAD_SQUARE},
-        {KEY_V, PAD_TRIANGLE}, {KEY_KP_1, PAD_TRIANGLE}, {KEY_I, PAD_TRIANGLE},
-        {KEY_Q, PAD_L1}, {KEY_E, PAD_R1},
-        {KEY_LEFT_SHIFT, PAD_L2}, {KEY_RIGHT_SHIFT, PAD_R2},
-        {KEY_ENTER, PAD_START}, {KEY_TAB, PAD_SELECT},
-        {KEY_ONE, PAD_L3}, {KEY_THREE, PAD_R3},
-    };
-    for (const auto &entry : kKeys)
-        if (IsKeyDown(entry.key))
-            pressed |= entry.mask;
+    uint8_t sticks[4] = {kPadStickCenter, kPadStickCenter, kPadStickCenter, kPadStickCenter};
+    uint16_t pressed = hostPressedMask(sticks);
+    // Presses seen by the window loop since the last read count once even if already released.
+    pressed |= g_latchedButtons.exchange(0u, std::memory_order_relaxed);
+    data[4] = sticks[0];
+    data[5] = sticks[1];
+    data[6] = sticks[2];
+    data[7] = sticks[3];
 
     pressed |= scriptedPressedMask();
     const uint16_t btns = static_cast<uint16_t>(~pressed);
