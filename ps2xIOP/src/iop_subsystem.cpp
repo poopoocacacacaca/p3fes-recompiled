@@ -1,3 +1,6 @@
+#include <cstdlib>
+#include <cstdio>
+#include <map>
 #include "ps2x/iop/iop_subsystem.h"
 
 #include "iop_service.h"
@@ -196,6 +199,22 @@ namespace ps2x::iop
 
     RpcResult IopSubsystem::handleRpc(const RpcRequest &request)
     {
+        // Debug aid: PS2X_RPC_LOG=1 prints, every 2000 calls, how many RPC calls each server id / function got.
+        static const bool rpcLog = std::getenv("PS2X_RPC_LOG") != nullptr;
+        if (rpcLog)
+        {
+            static std::map<std::pair<uint32_t, uint32_t>, uint32_t> counts;
+            static uint32_t total = 0;
+            ++counts[{request.sid, request.function}];
+            if (++total % 2000u == 0u)
+            {
+                std::fprintf(stderr, "[rpc] %u calls:", total);
+                for (const auto &[key, n] : counts)
+                    std::fprintf(stderr, " %08x/%u=%u", key.first, key.second, n);
+                std::fprintf(stderr, "\n");
+                counts.clear();
+            }
+        }
         const auto route = m_impl->routes.find(request.sid);
         detail::IopService *hle = route != m_impl->routes.end() ? route->second : nullptr;
 

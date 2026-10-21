@@ -127,10 +127,24 @@ namespace ps2x::iop::detail
         return reg(offset);
     }
 
+    namespace
+    {
+        extern uint32_t g_diagWrites[2];
+        extern uint32_t g_diagVoiceWrites[2];
+    }
+
     void Spu2::write16(uint32_t physical, uint16_t value)
     {
         const uint32_t offset = (physical - RegBase) & 0x7FEu;
         reg(offset) = value;
+        if (offset < 0x760u)
+        {
+            const uint32_t c = offset >= 0x400u ? 1u : 0u;
+            ++g_diagWrites[c];
+            const uint32_t l = offset & 0x3FFu;
+            if (l < 0x180u || (l >= 0x1C0u && l < 0x2E0u))
+                ++g_diagVoiceWrites[c];
+        }
         if (offset >= 0x760u)
             return;
 
@@ -244,8 +258,21 @@ namespace ps2x::iop::detail
         reg(core * 0x400u + RegStatx) |= StatxDmaReady;
     }
 
+    namespace
+    {
+        // PS2X_SPU2_DIAG counters, per core, since the last diag line: voices keyed on, voice samples produced, and
+        // voice samples dropped because the voice's VMIX bit is off on both sides.
+        uint32_t g_diagKeyOns[2] = {};
+        uint32_t g_diagVoiceSamples[2] = {};
+        uint32_t g_diagUnmixedSamples[2] = {};
+        uint32_t g_diagWrites[2] = {};      // register writes
+        uint32_t g_diagVoiceWrites[2] = {}; // writes to the per-voice parameter / address blocks
+    }
+
     void Spu2::keyOn(uint32_t core, uint32_t mask, uint32_t firstVoice)
     {
+        if (core < 2u)
+            g_diagKeyOns[core] += static_cast<uint32_t>(__builtin_popcount(mask));
         for (uint32_t bit = 0; bit < 16u; ++bit)
         {
             if ((mask & (1u << bit)) == 0u || firstVoice + bit >= VoicesPerCore)
@@ -485,11 +512,14 @@ namespace ps2x::iop::detail
                     const uint32_t m = RegMvolBase + core * RegMvolStride;
                     std::fprintf(stderr,
                                  "[spu2-diag] t=%llus core%u admas=%04X attr=%04X mmix=%04X mvol=%04X/%04X bvol=%04X/%04X "
-                                 "avol=%04X/%04X ring=%u queue=%zu\n",
+                                 "avol=%04X/%04X ring=%u queue=%zu kon=%u voiceSamples=%u unmixed=%u writes=%u voiceWrites=%u\n",
                                  static_cast<unsigned long long>(samples / 48000u), core, reg(base + RegAdmas),
                                  reg(base + RegAttr), reg(base + RegMmix), reg(m), reg(m + 2u), reg(m + 0x0Cu), reg(m + 0x0Eu),
                                  reg(m + 0x08u), reg(m + 0x0Au), m_input[core].ringCount,
-                                 m_input[core].queue.size() - m_input[core].queueRead);
+                                 m_input[core].queue.size() - m_input[core].queueRead, g_diagKeyOns[core],
+                                 g_diagVoiceSamples[core], g_diagUnmixedSamples[core], g_diagWrites[core], g_diagVoiceWrites[core]);
+                    g_diagKeyOns[core] = g_diagVoiceSamples[core] = g_diagUnmixedSamples[core] = 0u;
+                    g_diagWrites[core] = g_diagVoiceWrites[core] = 0u;
                 }
             }
         }
@@ -506,6 +536,9 @@ namespace ps2x::iop::detail
                 const int32_t sample = stepVoice(core, index);
                 if (sample == 0)
                     continue;
+                ++g_diagVoiceSamples[core];
+                if ((mixLeft & (1u << index)) == 0u && (mixRight & (1u << index)) == 0u)
+                    ++g_diagUnmixedSamples[core];
                 const int32_t volLeft = volumeFromRegister(reg(voiceReg(core, index, 0u)));
                 const int32_t volRight = volumeFromRegister(reg(voiceReg(core, index, 2u)));
                 if ((mixLeft & (1u << index)) != 0u)
