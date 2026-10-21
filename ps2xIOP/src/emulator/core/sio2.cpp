@@ -25,6 +25,7 @@ namespace ps2x::iop::detail
         m_present = true;
         m_loaded = false;
         m_fileExists = false;
+        m_file.reset();
         m_image.clear();
         m_address = 0;
         terminator = 0x55u;
@@ -34,6 +35,7 @@ namespace ps2x::iop::detail
     {
         m_present = false;
         m_loaded = false;
+        m_file.reset();
         m_image.clear();
     }
 
@@ -76,11 +78,21 @@ namespace ps2x::iop::detail
             std::cerr << "[SIO2] memory card creada en " << m_path << std::endl;
             return;
         }
-        std::fstream file(m_path, std::ios::binary | std::ios::in | std::ios::out);
-        if (!file)
+        if (!m_file)
+        {
+            std::FILE *raw = std::fopen(m_path.c_str(), "r+b");
+            if (!raw)
+            {
+                std::cerr << "[SIO2] cannot open the memory card " << m_path << " for writing" << std::endl;
+                return;
+            }
+            m_file.reset(raw, [](std::FILE *f) { std::fclose(f); });
+        }
+        // The card image is under 2 GB, so a long offset is enough on every platform.
+        if (std::fseek(m_file.get(), static_cast<long>(offset), SEEK_SET) != 0)
             return;
-        file.seekp(offset);
-        file.write(reinterpret_cast<const char *>(m_image.data() + offset), static_cast<std::streamsize>(size));
+        std::fwrite(m_image.data() + offset, 1, size, m_file.get());
+        std::fflush(m_file.get());
     }
 
     void MemoryCard::read(uint8_t *destination, size_t size)

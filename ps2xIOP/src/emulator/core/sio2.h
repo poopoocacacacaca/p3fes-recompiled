@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdio>
+#include <memory>
+
 // Emulation of the IOP's SIO2 (0x1F808200-0x1F8082FF) and the PS2 memory card.
 // sio2man writes the command queue (SEND3), the bytes of each command (FIFO or DMA 11), sets CTRL bit 0 and
 // waits for interrupt 17; then it reads RECV1-3 and the reply (FIFO or DMA 12). Each command starts with the
@@ -51,6 +54,9 @@ namespace ps2x::iop::detail
         bool m_present = false;
         bool m_loaded = false;
         bool m_fileExists = false;
+        // The card file stays open between writes: a save is hundreds of small page writes, and opening the file for
+        // each one is very slow on Windows (antivirus scans every open), which made saving look stuck.
+        std::shared_ptr<std::FILE> m_file;
         std::vector<uint8_t> m_image;
         uint32_t m_address = 0;
     };
