@@ -16,6 +16,12 @@ rem Controller: first connected gamepad (XInput / DualShock / DualSense via SDL 
 rem Stick deadzone, 0.0 - 0.9 (default 0.15):
 rem set PS2X_PAD_DEADZONE=0.15
 
+rem Renderer: PCSX2's GS (pcsx2gs.dll and pcsx2gs_resources\ next to the exe) is the default.
+rem   pcsx2-sw = PCSX2 software renderer, builtin = the port's own CPU rasterizer.
+rem set PS2X_GS_RENDERER=pcsx2-sw
+rem Internal resolution multiplier for PCSX2's hardware renderer (1 = native):
+rem set PS2X_PCSX2_SCALE=2
+
 rem Hide the developer overlay:
 set PS2X_HIDE_DEBUG_UI=1
 

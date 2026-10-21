@@ -132,7 +132,7 @@ See [`p3fes/README.md`](p3fes/README.md). In short:
 | Variable | Effect |
 |---|---|
 | `PS2X_CALLBACK_STACK_TOP=0x100000` | Required: keeps interrupt/callback stacks clear of the main stack |
-| `PS2X_GS_RENDERER=pcsx2` / `pcsx2-sw` | PCSX2's GS, hardware (OpenGL) or software renderer (`pcsx2gs.so`/`.dll` next to the executable) |
+| `PS2X_GS_RENDERER=pcsx2` (default) / `pcsx2-sw` / `builtin` | PCSX2's GS with the OpenGL or software renderer (`pcsx2gs.so`/`.dll` next to the executable), or the built-in rasterizer |
 | `PS2X_PCSX2_SCALE=2` | PCSX2 internal resolution multiplier |
 | `PS2X_PCSX2_OPTIONS=` | PCSX2 image options, `key=value;…` (see `third_party/pcsx2-gs/include/pcsx2gs_api.h`) |
 | `PS2X_GS_GPU=1` | Built-in OpenGL GS backend instead of the CPU rasterizer |

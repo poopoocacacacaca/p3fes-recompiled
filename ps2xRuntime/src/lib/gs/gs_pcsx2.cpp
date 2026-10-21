@@ -509,8 +509,10 @@ namespace ps2_pcsx2gs
 {
     bool Requested()
     {
+        // PCSX2's GS is the default whenever its library sits next to the executable (Install falls back to the
+        // built-in renderer when it does not); PS2X_GS_RENDERER=builtin keeps the built-in one.
         const char *v = std::getenv("PS2X_GS_RENDERER");
-        return v && std::strncmp(v, "pcsx2", 5) == 0;
+        return !v || !*v || std::strncmp(v, "pcsx2", 5) == 0;
     }
 
     bool Install(GS &gs)
