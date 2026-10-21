@@ -96,7 +96,8 @@ C++ calls. Indirect jumps go through a dispatcher that maps a guest PC to a comp
 - **IPU:** the MPEG-1/2 decoder adapted from PCSX2.
 - **GS:** a CPU rasterizer and an OpenGL backend with an optional render thread. PCSX2's GS is being integrated as a
   shared library (`third_party/pcsx2-gs`) fed through an observer on the GIF stream.
-- **VIF1/VU1:** interpreted, or compiled ahead of time from captured microprograms.
+- **VIF1/VU1:** VU1 microcode runs on PCSX2's microVU recompiler (`third_party/kzvu`); `PS2X_VU1=interp` selects the
+  built-in interpreter.
 - **IOP:** the game's original IRX modules (`SIO2MAN`, `PADMAN`, `MC2_S1`, `LIBSD`, `CRI_ADXI`, `SKSOUND`, …) run on an
   R3000A interpreter over an HLE IOP kernel. SPU2 handles voices and ADMA streaming, and SIO2 handles PCSX2-format
   memory cards.
@@ -166,7 +167,9 @@ Debug traces: `PS2X_SPU2_DIAG`, `PS2X_GS_DIAG`, `PS2X_IPU_TRACE`, `PS2X_DMA_LOG`
   microcode compiler (`p3fes/tools/vu1/generar_vu1.cpp`) and many EE/GS fixes, merged here, plus the status map design.
 - Taylor N. Albarnaz / LightVelox's Shadow of the Colossus fork of PS2Recomp: the OpenGL GS backend (via god-of-war-recomp).
 - [urban-reign-recomp](https://github.com/thiagordsfx/urban-reign-recomp) by thiagordsfx: the PCSX2 GS bridge design.
-- [PCSX2](https://github.com/PCSX2/pcsx2): the IPU and GS, and the accuracy reference.
+- [PCSX2](https://github.com/PCSX2/pcsx2): the IPU, the GS and microVU (VU1 recompiler), and the accuracy reference.
+- [KillzoneRecomp](https://github.com/drakolordx7/KillzoneRecomp) by drakolordx7: kzvu, PCSX2's microVU packaged for
+  PS2Recomp (`third_party/kzvu`, ported here to clang and MinGW).
 - [ps2-web-recomp](https://github.com/snuri00/ps2-web-recomp): SPU2, IPU and GPU GS reference.
 - The [snaku Persona 3 FES decompilation](https://github.com/snaku/Persona3-FES-Decompilation), for function names.
 - The [Persona 4 decompilation](https://github.com/Raikaru/Persona4-Decompilation) by Raikaru: names for shared

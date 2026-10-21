@@ -143,6 +143,7 @@ namespace
 #endif
 
 void ps2PadLatchHostInput(); // ps2_pad.cpp
+#include "ps2_host_vu1.h"
 
 namespace ps2_stubs
 {
@@ -743,6 +744,12 @@ bool PS2Runtime::syncCoreSubsystems()
                                      {
                                          cpuContext = &m_cpuContext;
                                      }
+                                     if (ps2_host_vu1::enabled())
+                                     {
+                                         ps2_host_vu1::mscal(startPC, top, itop, cpuContext->vu0_fbrst,
+                                                             m_memory.getVU1CodeGeneration(), &cpuContext->vu0_vpu_stat);
+                                         return;
+                                     }
                                      m_vu1.state().dBitEnabled =
                                          (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
                                      m_vu1.state().tBitEnabled =
@@ -764,6 +771,12 @@ bool PS2Runtime::syncCoreSubsystems()
                                      if (!cpuContext)
                                      {
                                          cpuContext = &m_cpuContext;
+                                     }
+                                     if (ps2_host_vu1::enabled())
+                                     {
+                                         ps2_host_vu1::mscnt(top, itop, cpuContext->vu0_fbrst,
+                                                             m_memory.getVU1CodeGeneration(), &cpuContext->vu0_vpu_stat);
+                                         return;
                                      }
                                      m_vu1.state().dBitEnabled =
                                          (cpuContext->vu0_fbrst & (1u << 10)) != 0u;

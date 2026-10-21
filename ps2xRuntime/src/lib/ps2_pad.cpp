@@ -42,12 +42,13 @@ namespace
     {
         double start = 0.0;
         double duration = 0.25;
-        uint16_t mask = 0u;
+        uint32_t mask = 0u; // PAD_* bits; bits 16-19 push the left stick up/down/left/right
     };
 
-    uint16_t scriptButtonMask(const std::string &name)
+    uint32_t scriptButtonMask(const std::string &name)
     {
-        static const struct { const char *n; uint16_t m; } kNames[] = {
+        static const struct { const char *n; uint32_t m; } kNames[] = {
+            {"LSUP", 0x10000u}, {"LSDOWN", 0x20000u}, {"LSLEFT", 0x40000u}, {"LSRIGHT", 0x80000u},
             {"LEFT", 0x0080u}, {"DOWN", 0x0040u}, {"RIGHT", 0x0020u}, {"UP", 0x0010u},
             {"START", 0x0008u}, {"R3", 0x0004u}, {"L3", 0x0002u}, {"SELECT", 0x0001u},
             {"SQUARE", 0x8000u}, {"CROSS", 0x4000u}, {"CIRCLE", 0x2000u}, {"TRIANGLE", 0x1000u},
@@ -94,7 +95,7 @@ namespace
         return script;
     }
 
-    uint16_t scriptedPressedMask()
+    uint32_t scriptedPressedMask()
     {
         const auto &script = padScript();
         if (script.empty())
@@ -105,7 +106,7 @@ namespace
         static const auto t0 = std::chrono::steady_clock::now();
         const double now = fieldClock ? static_cast<double>(g_path3TraceVsync) * 1001.0 / 60000.0
                                       : std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-        uint16_t mask = 0u;
+        uint32_t mask = 0u;
         for (const ScriptedPress &press : script)
         {
             if (now >= press.start && now < press.start + press.duration)
@@ -252,7 +253,12 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     data[6] = sticks[2];
     data[7] = sticks[3];
 
-    pressed |= scriptedPressedMask();
+    const uint32_t scripted = scriptedPressedMask();
+    pressed |= static_cast<uint16_t>(scripted);
+    if (scripted & 0x10000u) data[7] = 0x00u;
+    if (scripted & 0x20000u) data[7] = 0xFFu;
+    if (scripted & 0x40000u) data[6] = 0x00u;
+    if (scripted & 0x80000u) data[6] = 0xFFu;
     const uint16_t btns = static_cast<uint16_t>(~pressed);
 
     data[2] = static_cast<uint8_t>(btns & 0xFF);

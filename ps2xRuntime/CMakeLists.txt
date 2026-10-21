@@ -414,6 +414,7 @@ add_library(ps2_runtime ${PS2X_RUNTIME_LIBRARY_TYPE}
     src/lib/ps2_vfs.cpp
     src/lib/ps2_runtime.cpp
     src/lib/ps2_vif1_interpreter.cpp
+    src/lib/ps2_host_vu1.cpp # VU1 on PCSX2's microVU (third_party/kzvu)
     src/lib/vu/ps2_vu1_core.cpp
     src/lib/vu/ps2_vu1_upper.cpp
     src/lib/vu/ps2_vu1_lower.cpp
@@ -579,6 +580,10 @@ target_include_directories(ps2_runtime PUBLIC
 )
 
 target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ffmpeg ps2_iop ${CMAKE_DL_LIBS})
+if(TARGET kzvu)
+    target_link_libraries(ps2_runtime PRIVATE kzvu)
+    target_compile_definitions(ps2_runtime PRIVATE PS2X_HAVE_KZVU=1)
+endif()
 # Only gs_pcsx2.cpp sees the PCSX2 GS C API, so the rest of the runtime keeps its compile flags.
 set_source_files_properties(src/lib/gs/gs_pcsx2.cpp PROPERTIES
     INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/pcsx2-gs/include")

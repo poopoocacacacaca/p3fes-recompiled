@@ -80,6 +80,12 @@ if(PS2X_BUILD_RECOMP)
 endif()
 
 if(PS2X_BUILD_RUNTIME)
+    # PCSX2's microVU recompiler for VU1 (third_party/kzvu), linked into the runtime library. PS2X_VU1=interp at run
+    # time keeps the built-in interpreter.
+    option(PS2X_KZVU "Run VU1 on PCSX2's microVU recompiler" ON)
+    if(PS2X_KZVU AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+        add_subdirectory("third_party/kzvu")
+    endif()
     add_subdirectory("ps2xIOP")
     add_subdirectory("ps2xRuntime")
     # PCSX2's GS as pcsx2gs.so / pcsx2gs.dll next to the executable (PS2X_GS_RENDERER=pcsx2).

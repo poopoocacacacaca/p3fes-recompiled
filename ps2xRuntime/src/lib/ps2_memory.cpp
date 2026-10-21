@@ -1,5 +1,6 @@
 #include <cstdio>
 #include "runtime/ps2_memory.h"
+#include "ps2_host_vu1.h"
 #include "ipu/ps2_ipu.h"
 #include "runtime/ps2_address.h"
 #include "runtime/gs/gs_frontend.h"
@@ -522,12 +523,14 @@ PS2Memory::~PS2Memory()
 
     if (m_vu1Code)
     {
-        delete[] m_vu1Code;
+        if (!ps2_host_vu1::ownsBuffer(m_vu1Code))
+            delete[] m_vu1Code;
         m_vu1Code = nullptr;
     }
     if (m_vu1Data)
     {
-        delete[] m_vu1Data;
+        if (!ps2_host_vu1::ownsBuffer(m_vu1Data))
+            delete[] m_vu1Data;
         m_vu1Data = nullptr;
     }
     if (m_vu0Code)
@@ -558,8 +561,10 @@ bool PS2Memory::initialize(size_t ramSize)
         delete[] m_gsVRAM;
         delete[] m_vu0Code;
         delete[] m_vu0Data;
-        delete[] m_vu1Code;
-        delete[] m_vu1Data;
+        if (!ps2_host_vu1::ownsBuffer(m_vu1Code))
+            delete[] m_vu1Code;
+        if (!ps2_host_vu1::ownsBuffer(m_vu1Data))
+            delete[] m_vu1Data;
         m_rdram = nullptr;
         m_scratchpad = nullptr;
         ps2SetScratchpadHostPtr(nullptr);
@@ -633,8 +638,18 @@ bool PS2Memory::initialize(size_t ramSize)
         std::memset(m_vu0Code, 0, PS2_VU0_CODE_SIZE);
         std::memset(m_vu0Data, 0, PS2_VU0_DATA_SIZE);
 
-        m_vu1Code = new uint8_t[PS2_VU1_CODE_SIZE];
-        m_vu1Data = new uint8_t[PS2_VU1_DATA_SIZE];
+        // With VU1 on microVU, VU1 memory is kzvu's (fixed buffers its recompiled code addresses directly).
+        if (ps2_host_vu1::enabled())
+        {
+            m_vu1Code = ps2_host_vu1::codeMem();
+            m_vu1Data = ps2_host_vu1::dataMem();
+            ps2_host_vu1::setMemory(this);
+        }
+        else
+        {
+            m_vu1Code = new uint8_t[PS2_VU1_CODE_SIZE];
+            m_vu1Data = new uint8_t[PS2_VU1_DATA_SIZE];
+        }
         std::memset(m_vu1Code, 0, PS2_VU1_CODE_SIZE);
         std::memset(m_vu1Data, 0, PS2_VU1_DATA_SIZE);
         markVU0CodeModified();
