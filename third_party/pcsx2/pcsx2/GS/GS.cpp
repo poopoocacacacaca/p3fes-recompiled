@@ -36,6 +36,9 @@
 #endif
 
 #ifdef _WIN32
+#include "common/RedtapeWindows.h"
+#endif
+#if defined(_WIN32) && !defined(PCSX2GS_NO_D3D) // P3FES (pcsx2-gs): no D3D in the OpenGL/SW build
 
 #include "GS/Renderers/DX11/GSDevice11.h"
 #include "GS/Renderers/DX12/GSDevice12.h"
@@ -86,7 +89,7 @@ static RenderAPI GetAPIForRenderer(GSRendererType renderer)
 		case GSRendererType::VK:
 			return RenderAPI::Vulkan;
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(PCSX2GS_NO_D3D) // P3FES (pcsx2-gs): no D3D in the OpenGL/SW build
 		case GSRendererType::DX11:
 			return RenderAPI::D3D11;
 
@@ -111,7 +114,7 @@ static bool OpenGSDevice(GSRendererType renderer, bool clear_state_on_fail, bool
 	const RenderAPI new_api = GetAPIForRenderer(renderer);
 	switch (new_api)
 	{
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(PCSX2GS_NO_D3D) // P3FES (pcsx2-gs): no D3D in the OpenGL/SW build
 		case RenderAPI::D3D11:
 			g_gs_device = std::make_unique<GSDevice11>();
 			break;
@@ -630,7 +633,7 @@ std::vector<GSAdapterInfo> GSGetAdapterInfo(GSRendererType renderer)
 	std::vector<GSAdapterInfo> ret;
 	switch (renderer)
 	{
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(PCSX2GS_NO_D3D) // P3FES (pcsx2-gs): no D3D in the OpenGL/SW build
 		case GSRendererType::DX11:
 		case GSRendererType::DX12:
 		{

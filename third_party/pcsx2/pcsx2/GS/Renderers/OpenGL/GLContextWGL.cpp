@@ -14,12 +14,12 @@
 
 static void* GetProcAddressCallback(const char* name)
 {
-	void* addr = wglGetProcAddress(name);
+	void* addr = reinterpret_cast<void*>(wglGetProcAddress(name));
 	if (addr)
 		return addr;
 
 	// try opengl32.dll
-	return ::GetProcAddress(GetModuleHandleA("opengl32.dll"), name);
+	return reinterpret_cast<void*>(::GetProcAddress(GetModuleHandleA("opengl32.dll"), name));
 }
 
 static bool ReloadWGL(HDC dc)

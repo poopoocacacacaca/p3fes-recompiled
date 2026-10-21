@@ -24,8 +24,11 @@ target_compile_definitions(pcsx2_flags INTERFACE
 if(WIN32)
     target_compile_definitions(pcsx2_flags INTERFACE
         WINVER=0x0A00 _WIN32_WINNT=0x0A00 WIN32_LEAN_AND_MEAN NOMINMAX _UNICODE UNICODE
-        _CRT_NONSTDC_NO_WARNINGS _CRT_SECURE_NO_WARNINGS)
-else()
+        _CRT_NONSTDC_NO_WARNINGS _CRT_SECURE_NO_WARNINGS PCSX2GS_NO_D3D)
+    if(NOT MSVC)
+        # MinGW: Windows SDK headers in lower case, and the few MSVC-only pieces PCSX2 assumes.
+        target_include_directories(pcsx2_flags INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/compat/mingw")
+    endif()
 endif()
 target_compile_options(pcsx2_flags INTERFACE -msse4.1 -fno-strict-aliasing -w -fvisibility=hidden)
 target_include_directories(pcsx2_flags INTERFACE
@@ -105,7 +108,7 @@ add_library(pcsx2_gs STATIC ${GS_SOURCES})
 target_link_libraries(pcsx2_gs PRIVATE pcsx2_flags)
 target_link_libraries(pcsx2_gs PUBLIC pcsx2_common pcsx2_fmt pcsx2_imgui pcsx2_glad cpuinfo)
 if(WIN32)
-    target_link_libraries(pcsx2_gs PUBLIC opengl32 gdi32 winmm ole32 windowscodecs)
+    target_link_libraries(pcsx2_gs PUBLIC opengl32 gdi32 winmm ole32 windowscodecs pathcch onecore) # onecore: VirtualAlloc2/MapViewOfFile3 (Windows 10 1803+)
 else()
     find_package(Threads REQUIRED)
     target_link_libraries(pcsx2_gs PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
@@ -120,6 +123,9 @@ target_link_libraries(pcsx2gs PRIVATE pcsx2_flags pcsx2gs_api pcsx2_gs)
 target_compile_definitions(pcsx2gs PRIVATE PCSX2GS_BUILD=1)
 if(NOT WIN32)
     target_link_options(pcsx2gs PRIVATE -Wl,--exclude-libs,ALL -Wl,--no-undefined)
+elseif(NOT MSVC)
+    # MinGW: carry libc++/libunwind inside the DLL, so it needs nothing beyond Windows' own DLLs.
+    target_link_options(pcsx2gs PRIVATE -static)
 endif()
 set_target_properties(pcsx2gs PROPERTIES PREFIX "")
 if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)

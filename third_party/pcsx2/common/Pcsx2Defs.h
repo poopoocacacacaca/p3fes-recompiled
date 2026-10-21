@@ -89,8 +89,16 @@ static constexpr unsigned int __pagealignsize = 0x1000;
 // __forceinline_odr is for member functions that are defined in headers. MSVC can't specify
 // inline and __forceinline at the same time, but it required to not get ODR errors in GCC.
 
+#if defined(__MINGW32__)
+// P3FES (pcsx2-gs): the Windows SDK headers mark their inline helpers __forceinline too; without 'inline' each
+// translation unit would emit a strong copy and the link would fail with duplicate symbols.
+#undef __forceinline
+#define __forceinline __attribute__((always_inline, unused)) inline
+#define __forceinline_odr __forceinline
+#else
 #define __forceinline __attribute__((always_inline, unused))
 #define __forceinline_odr __forceinline inline
+#endif
 #define __noinline __attribute__((noinline))
 #define __noreturn __attribute__((noreturn))
 

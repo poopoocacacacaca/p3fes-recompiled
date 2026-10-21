@@ -8,7 +8,7 @@
 #include <bit>
 #include <cstring>
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW32__) // P3FES: MinGW provides these intrinsics too
 
 #include <intrin.h>
 
