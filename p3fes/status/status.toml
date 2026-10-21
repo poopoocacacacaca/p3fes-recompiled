@@ -3,7 +3,7 @@
 #
 # States: "done" (working), "partial" (works with gaps, or unverified), "todo" (not reached / not emulated).
 
-updated = "2026-10-14"
+updated = "2026-10-21"
 
 # EE code of SLUS_216.21 (from ps2_recomp's summary)
 [code]
@@ -66,12 +66,12 @@ state = "todo"
 panel = "Game"
 name = "Models / FX"
 match = '^(mdl|eff|prim)'
-state = "todo"
+state = "partial"
 [[module]]
 panel = "Game"
 name = "Scripts / events"
 match = '^(scr|mt_|MT|nm[A-Z])'
-state = "todo"
+state = "partial"
 [[module]]
 panel = "Game"
 name = "Calendar / data"
@@ -81,7 +81,7 @@ state = "todo"
 panel = "Game"
 name = "UI / text"
 match = '^(itf|fr[A-Z]|fm[A-Z])'
-state = "todo"
+state = "partial"
 [[module]]
 panel = "Game"
 name = "Social"
@@ -121,7 +121,7 @@ items = [
 group = "GS / VU"
 items = [
   { name = "GS", weight = 5, state = "partial" },
-  { name = "VIF1/VU1", weight = 4, state = "todo" },
+  { name = "VIF1/VU1", weight = 4, state = "partial" },
   { name = "IPU", weight = 2.5, state = "done" },
   { name = "GIF", weight = 2, state = "done" },
   { name = "Tex/CLUT", weight = 1.5, state = "partial" },
@@ -149,15 +149,15 @@ done = 0.85
 [[phase]]
 name = "Renderer"
 weight = 15
-done = 0.45
+done = 0.6
 [[phase]]
 name = "Title"
 weight = 10
-done = 0.9
+done = 1.0
 [[phase]]
 name = "Field / Tartarus"
 weight = 15
-done = 0.0
+done = 0.1
 [[phase]]
 name = "Battles"
 weight = 10
@@ -165,7 +165,7 @@ done = 0.0
 [[phase]]
 name = "Story"
 weight = 10
-done = 0.0
+done = 0.05
 [[phase]]
 name = "Playthrough"
 weight = 5

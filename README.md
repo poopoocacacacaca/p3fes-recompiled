@@ -31,7 +31,10 @@ The game's MIPS R5900 code is statically recompiled to C++ and run on a reimplem
 
 <sub>Generated from <a href="p3fes/status/status.toml"><code>p3fes/status/status.toml</code></a> by <code>p3fes/scripts/status_chart.py</code>. 🟩 working · 🟦 partial · 🟥 pending.</sub>
 
-**Where it stands:** the game boots from its own CVM archives, detects the memory card and controller, plays the opening movie with sound through PCSX2's GS, and reaches the title screen and the *The Journey* / *The Answer* menu. The main menu renders correctly, and the 2-core test VM runs at about 0.75× speed with the EE/IOP thread as the bottleneck. Next up: New Game and the first 3D scenes.
+**Where it stands:** the game boots from its own CVM archives, detects the memory card and controller, plays the opening movie with sound through PCSX2's GS, and reaches the title screen and the *The Journey* / *The Answer* menu. **New Game works:** the FES introduction, the data
+transfer prompt, the opening anime, the contract and name entry, and the first 3D scene in the dorm with Mitsuru and Yukari,
+all rendered correctly. Menus and movies run at about full speed; 3D scenes are slow (about 5 fps on the 2-core test VM)
+because VU1 microcode is still interpreted. Next up: compiled VU1 and getting to the first Dark Hour.
 
 | Milestone | |
 |---|:---:|
@@ -43,6 +46,9 @@ The game's MIPS R5900 code is statically recompiled to C++ and run on a reimplem
 | Movies at full speed | 🔧 |
 | Title screen | ✅ |
 | Main menu (*The Journey* / *The Answer*) | ✅ |
+| New Game: introduction, opening anime, name entry | ✅ |
+| First 3D scene (dorm) renders correctly | ✅ |
+| 3D scenes at full speed (compiled VU1) | 🔧 |
 | Field, Tartarus, battles, events | ⏳ |
 | Widescreen, upscaling, 60 FPS | ⏳ |
 
