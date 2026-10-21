@@ -328,6 +328,28 @@ namespace
             const uint64_t set1[15] = {r.pmode, r.smode1, r.smode2, r.srfsh, r.synch1, r.synch2, r.syncv, r.dispfb1,
                                        r.display1, r.dispfb2, r.display2, r.extbuf, r.extdata, r.extwrite, r.bgcolor};
             std::memcpy(regs.regset1, set1, sizeof(set1));
+            // Log the display setup whenever it changes (mode switches are rare): resolution, offsets, field mode.
+            {
+                static uint64_t last[5] = {~0ull, ~0ull, ~0ull, ~0ull, ~0ull};
+                const uint64_t now[5] = {r.pmode, r.smode2, r.dispfb1 | (r.dispfb2 << 32), r.display1, r.display2};
+                if (std::memcmp(last, now, sizeof(now)) != 0)
+                {
+                    std::memcpy(last, now, sizeof(now));
+                    const auto disp = [](uint64_t d, char *out, size_t n)
+                    {
+                        std::snprintf(out, n, "dx=%llu dy=%llu magh=%llu magv=%llu dw=%llu dh=%llu",
+                                      (unsigned long long)(d & 0xFFF), (unsigned long long)((d >> 12) & 0x7FF),
+                                      (unsigned long long)((d >> 23) & 0xF), (unsigned long long)((d >> 27) & 0x3),
+                                      (unsigned long long)((d >> 32) & 0xFFF), (unsigned long long)((d >> 44) & 0x7FF));
+                    };
+                    char d1[96], d2[96];
+                    disp(r.display1, d1, sizeof(d1));
+                    disp(r.display2, d2, sizeof(d2));
+                    std::fprintf(stderr, "[gs-display] field %llu pmode=%llx smode2=%llx dispfb1=%llx [%s] dispfb2=%llx [%s]\n",
+                                 (unsigned long long)tick, (unsigned long long)r.pmode, (unsigned long long)r.smode2,
+                                 (unsigned long long)r.dispfb1, d1, (unsigned long long)r.dispfb2, d2);
+                }
+            }
             regs.csr = r.csr.load(std::memory_order_relaxed);
             regs.imr = r.imr;
             regs.busdir = r.busdir;

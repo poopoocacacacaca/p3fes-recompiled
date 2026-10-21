@@ -1011,11 +1011,44 @@ namespace ps2_stubs
         if (h == 0)
             h = 448;
 
-        uint32_t fbw = (w + 63) / 64;
-        uint64_t dispfb = makeDispFb(0, fbw, psm, 0, 0);
-        uint64_t display = makeDisplay(dx, dy, 0, 0, w - 1, h - 1);
+        // Same values as Sony's libgraph (formula from the ICO decompilation's sce/libgraph, MIT): DISPLAY in video
+        // clock units with the NTSC/PAL start offsets, MAGH from the width, PMODE/SMODE2 from sceGsResetGraph's
+        // parameters. The old pixel-unit values (MAGH 0, no offsets, SMODE2 0) worked for the built-in renderer but
+        // made PCSX2's GS output a 320-wide, vertically shifted picture.
+        const uint32_t q = (w + 0x9FFu) / w; // MAGH + 1: video clocks per pixel (2560 / w rounded up)
+        const bool pal = g_gparam.omode == 3u;
+        const uint32_t startX = pal ? 0x290u : 0x27Cu;
+        uint32_t startY;
+        if (g_gparam.interlace & 0x1u)
+            startY = pal ? 0x48u : 0x32u;
+        else
+            startY = pal ? 0x24u : 0x19u;
+        const uint32_t dh = ((g_gparam.interlace & 0x1u) && (g_gparam.ffmode & 0x1u)) ? (h * 2u - 1u) : (h - 1u);
+        const uint64_t display = makeDisplay((dx * q + startX) & 0xFFFu, (dy + startY) & 0xFFFu, q - 1u, 0u, q * w - 1u, dh);
+        const uint64_t dispfb = makeDispFb(0, (w + 63) / 64, psm, 0, 0);
+        uint64_t smode2;
+        if (g_gparam.interlace & 0x1u)
+            smode2 = (g_gparam.ffmode & 0x1u) ? 3u : 1u;
+        else
+            smode2 = 2u;
 
         writeGsDispEnv(rdram, envAddr, display, dispfb);
+        if (uint8_t *ptr = getMemPtr(rdram, envAddr))
+        {
+            GsDispEnvMem env{};
+            std::memcpy(&env, ptr, sizeof(env));
+            env.pmode = 0x66u;
+            env.smode2 = smode2;
+            env.bgcolor = 0u;
+            std::memcpy(ptr, &env, sizeof(env));
+        }
+        static bool logged = false;
+        if (!logged)
+        {
+            logged = true;
+            std::fprintf(stderr, "[gs] sceGsSetDefDispEnv w=%u h=%u dx=%u dy=%u psm=%u interlace=%u omode=%u ffmode=%u\n", w, h, dx,
+                         dy, psm, g_gparam.interlace, g_gparam.omode, g_gparam.ffmode);
+        }
         setReturnS32(ctx, 0);
     }
 
