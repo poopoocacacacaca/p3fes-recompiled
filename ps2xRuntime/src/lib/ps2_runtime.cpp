@@ -143,6 +143,7 @@ namespace
 #endif
 
 void ps2PadLatchHostInput(); // ps2_pad.cpp
+static std::string g_hostWindowTitle; // for the speed readout in the title bar
 #include "ps2_host_vu1.h"
 
 namespace ps2_stubs
@@ -813,6 +814,7 @@ bool PS2Runtime::initialize(const char *title)
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
 #else
         SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+        g_hostWindowTitle = title ? title : "";
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
 #endif
         m_hostWindowOwned = IsWindowReady();
@@ -2753,6 +2755,34 @@ void PS2Runtime::run()
         if (ps2_perf::countFrames()) ps2_perf::hostFrames.fetch_add(1, std::memory_order_relaxed);
         ps2_perf::report();
         ps2PadLatchHostInput();
+        // Speed readout in the window title (and run_log.txt every 5 s): emulated vertical blanks per real second and
+        // the share of a PS2's 59.94. PS2X_SHOW_SPEED=0 turns it off.
+        {
+            static const bool showSpeed = [] { const char *v = std::getenv("PS2X_SHOW_SPEED"); return !(v && v[0] == '0'); }();
+            static std::string baseTitle;
+            static auto windowStart = std::chrono::steady_clock::now();
+            static uint64_t windowTick = m_eeScheduler->currentVSyncTick();
+            static int logCountdown = 0;
+            const auto now = std::chrono::steady_clock::now();
+            const double secs = std::chrono::duration<double>(now - windowStart).count();
+            if (showSpeed && secs >= 1.0)
+            {
+                const uint64_t tick = m_eeScheduler->currentVSyncTick();
+                const double vps = static_cast<double>(tick - windowTick) / secs;
+                windowStart = now;
+                windowTick = tick;
+                if (baseTitle.empty())
+                    baseTitle = g_hostWindowTitle;
+                char title[256];
+                std::snprintf(title, sizeof(title), "%s | %.1f VPS (%.0f%%)", baseTitle.c_str(), vps, vps * 100.0 / 59.94);
+                SetWindowTitle(title);
+                if (++logCountdown >= 5)
+                {
+                    logCountdown = 0;
+                    std::fprintf(stderr, "[speed] %.1f vblanks/s (%.0f%% of a PS2)\n", vps, vps * 100.0 / 59.94);
+                }
+            }
+        }
 
         if (WindowShouldClose())
         {
