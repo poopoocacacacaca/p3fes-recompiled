@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstdio>
 #include <cctype>
 
 namespace
@@ -413,21 +414,32 @@ namespace
         }
 
         std::memset(dst, 0, byteCount);
-        std::ifstream file(path, std::ios::binary);
-        if (!file.is_open())
+        // C stdio with explicit 64-bit seeks: on Windows (llvm-mingw's libc++) ifstream::seekg fails past 2 GB, and
+        // DATA.CVM is about 3.3 GB.
+#if defined(_WIN32)
+        std::FILE *file = _wfopen(path.wstring().c_str(), L"rb");
+#else
+        std::FILE *file = std::fopen(path.string().c_str(), "rb");
+#endif
+        if (!file)
         {
             g_lastCdError = -1;
             return false;
         }
-
-        file.seekg(static_cast<std::streamoff>(offsetBytes), std::ios::beg);
-        if (!file.good())
+#if defined(_WIN32)
+        const bool seeked = _fseeki64(file, static_cast<int64_t>(offsetBytes), SEEK_SET) == 0;
+#else
+        const bool seeked = fseeko(file, static_cast<off_t>(offsetBytes), SEEK_SET) == 0;
+#endif
+        if (!seeked)
         {
+            std::fclose(file);
             g_lastCdError = -1;
             return false;
         }
 
-        file.read(reinterpret_cast<char *>(dst), static_cast<std::streamsize>(byteCount));
+        (void)std::fread(dst, 1, byteCount, file);
+        std::fclose(file);
         g_lastCdError = 0;
         return true;
     }

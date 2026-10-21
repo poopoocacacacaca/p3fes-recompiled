@@ -51,10 +51,19 @@ namespace
 
         int64_t seek(int64_t offset, int whence) override
         {
-            if (!m_file || offset < std::numeric_limits<long>::min() || offset > std::numeric_limits<long>::max() || std::fseek(m_file, static_cast<long>(offset), whence) != 0)
+            // 64-bit seeks: long is 32-bit on Windows, and the game's CVM archives are larger than 2 GB.
+            if (!m_file)
                 return -1;
-            const long position = std::ftell(m_file);
-            return position < 0 ? -1 : static_cast<int64_t>(position);
+#if defined(_WIN32)
+            if (_fseeki64(m_file, offset, whence) != 0)
+                return -1;
+            const int64_t position = _ftelli64(m_file);
+#else
+            if (fseeko(m_file, static_cast<off_t>(offset), whence) != 0)
+                return -1;
+            const int64_t position = static_cast<int64_t>(ftello(m_file));
+#endif
+            return position < 0 ? -1 : position;
         }
 
     private:
