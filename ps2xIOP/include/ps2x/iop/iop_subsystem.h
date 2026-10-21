@@ -46,6 +46,8 @@ namespace ps2x::iop
         // Emulated SPU2 output, interleaved stereo at 48 kHz. Can be called from the host's audio thread.
         // If more than maxLatencyFrames are buffered, the oldest are dropped.
         size_t drainAudio(int16_t *stereo, size_t maxFrames, size_t maxLatencyFrames = SIZE_MAX);
+        // Frames produced by the SPU2 and not drained yet.
+        size_t pendingAudioFrames() const;
 
     private:
         class Impl;

@@ -574,4 +574,20 @@ extern const uint32_t g_ps2RecompiledFunctionTableEnd;
 extern const uint32_t g_ps2RecompiledFunctionTableSlotCount;
 extern PS2Runtime::RecompiledFunction g_ps2RecompiledFunctionTable[];
 
+// The runtime does not link against the generated table: the executable that contains it hands it over at startup
+// (ps2SetRecompiledFunctionTable), so the runtime can live in a shared library (ps2runtime.dll / libps2_runtime.so)
+// that is updated without rebuilding the recompiled code.
+struct PS2RecompiledFunctionTable
+{
+    PS2Runtime::RecompiledFunction *table = nullptr;
+    uint32_t base = 0u;
+    uint32_t end = 0u;
+    uint32_t slotCount = 0u;
+};
+void ps2SetRecompiledFunctionTable(const PS2RecompiledFunctionTable &table);
+
+// Entry point of the runtime when it is a shared library: the game executable's main() registers the table and calls
+// this. abiHash identifies the runtime headers the executable was compiled against (see ps2x_abi.h).
+int ps2xRuntimeMain(int argc, char *argv[], const char *abiHash);
+
 #endif // PS2_RUNTIME_H

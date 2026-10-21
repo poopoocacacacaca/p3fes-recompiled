@@ -269,12 +269,41 @@ namespace
     }
 }
 
+#if defined(PS2X_RUNTIME_LIBRARY_ENTRY)
+#include "ps2x_abi.h"
+#if defined(_WIN32)
+// Declared by hand: windows.h clashes with raylib's names.
+extern "C" __declspec(dllimport) int __stdcall MessageBoxA(void *, const char *, const char *, unsigned int);
+#endif
+
+int ps2xRuntimeMain(int argc, char *argv[], const char *abiHash)
+{
+    setupTerminateLogger();
+    // The game executable and this runtime library must be built from the same runtime headers (layout of the CPU
+    // context, inline helpers). Otherwise the executable needs rebuilding.
+    if (!abiHash || std::strcmp(abiHash, PS2X_RUNTIME_ABI_HASH) != 0)
+    {
+        std::cerr << "[abi] game executable built against runtime headers " << (abiHash ? abiHash : "?")
+                  << ", runtime library is " << PS2X_RUNTIME_ABI_HASH << ": a newer game executable is needed" << std::endl;
+#if defined(_WIN32)
+        const int answer = MessageBoxA(nullptr,
+                                       "This update of the engine (ps2runtime.dll) needs a newer game executable "
+                                       "(ps2EntryRunner.exe).\n\nIt may crash or misbehave. Continue anyway?",
+                                       "P3FES Recompiled", 0x4u /* MB_YESNO */ | 0x30u /* MB_ICONWARNING */);
+        if (answer != 6 /* IDYES */)
+            return 2;
+#endif
+    }
+#else
 int main(int argc, char *argv[])
 {
 #if defined(__ANDROID__)
     redirectStdioToLogcat();
 #endif
     setupTerminateLogger();
+    ps2SetRecompiledFunctionTable({g_ps2RecompiledFunctionTable, g_ps2RecompiledFunctionTableBase,
+                                   g_ps2RecompiledFunctionTableEnd, g_ps2RecompiledFunctionTableSlotCount});
+#endif
 
     try
     {

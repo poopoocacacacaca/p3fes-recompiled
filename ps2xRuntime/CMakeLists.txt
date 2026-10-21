@@ -376,7 +376,21 @@ function(ps2x_stage_ffmpeg_runtime_dlls target_name)
     )
 endfunction()
 
-add_library(ps2_runtime STATIC
+# PS2X_SHARED_RUNTIME: the runtime is a shared library (ps2runtime.dll / libps2_runtime.so) and the executable only
+# holds the recompiled code, its main (src/game_main.cpp) and compiled VU1 microcode. Runtime fixes then ship as a new
+# library without rebuilding the recompiled code. Desktop only.
+if(PS2X_IS_ANDROID OR PS2X_IS_VITA)
+    set(PS2X_SHARED_RUNTIME OFF)
+else()
+    option(PS2X_SHARED_RUNTIME "Build the runtime as a shared library next to the game executable" ON)
+endif()
+if(PS2X_SHARED_RUNTIME)
+    set(PS2X_RUNTIME_LIBRARY_TYPE SHARED)
+else()
+    set(PS2X_RUNTIME_LIBRARY_TYPE STATIC)
+endif()
+
+add_library(ps2_runtime ${PS2X_RUNTIME_LIBRARY_TYPE}
     src/lib/game_overrides.cpp
     src/lib/gs/ps2_gif_arbiter.cpp
     src/lib/ps2_audio.cpp
@@ -470,7 +484,38 @@ endif()
 # Sampling profiler (PS2X_PROFILE); linked into the executable so its static
 # initializer is not dropped from the static library.
 set(PS2X_PROFILER_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/ps2_profiler.cpp")
-list(APPEND RUNNER_SRC_FILES "${PS2X_PROFILER_CPP}")
+set(PS2X_GAME_MAIN_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/game_main.cpp")
+if(PS2X_SHARED_RUNTIME)
+    # The runtime library owns main (as ps2xRuntimeMain) and the profiler; the executable gets a small main that hands
+    # it the function table.
+    list(REMOVE_ITEM RUNNER_SRC_FILES "${RUNNER_MAIN_CPP}" "${ROOT_MAIN_CPP}")
+    target_sources(ps2_runtime PRIVATE "${ROOT_MAIN_CPP}" "${PS2X_PROFILER_CPP}")
+    target_compile_definitions(ps2_runtime PRIVATE PS2X_RUNTIME_LIBRARY_ENTRY=1)
+    list(APPEND RUNNER_SRC_FILES "${PS2X_GAME_MAIN_CPP}")
+else()
+    list(APPEND RUNNER_SRC_FILES "${PS2X_PROFILER_CPP}")
+endif()
+
+# ps2x_abi.h: a hash of the runtime headers the recompiled code is compiled against. The executable passes its hash to
+# the runtime library, which warns when they differ (the executable then needs rebuilding).
+file(GLOB_RECURSE PS2X_ABI_HEADERS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/vu/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/vu/*.inl")
+list(FILTER PS2X_ABI_HEADERS EXCLUDE REGEX "ps2_recompiled_(functions|stubs)\\.h$")
+list(SORT PS2X_ABI_HEADERS)
+set(PS2X_ABI_TEXT "")
+foreach(header IN LISTS PS2X_ABI_HEADERS)
+    file(SHA256 "${header}" header_hash)
+    file(RELATIVE_PATH header_rel "${CMAKE_CURRENT_SOURCE_DIR}" "${header}")
+    string(APPEND PS2X_ABI_TEXT "${header_rel}:${header_hash};")
+endforeach()
+string(SHA256 PS2X_ABI_HASH "${PS2X_ABI_TEXT}")
+string(SUBSTRING "${PS2X_ABI_HASH}" 0 16 PS2X_ABI_HASH)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PS2X_ABI_HEADERS})
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/ps2x_abi.h"
+     CONTENT "#pragma once\n#define PS2X_RUNTIME_ABI_HASH \"${PS2X_ABI_HASH}\"\n")
+target_include_directories(ps2_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 if(PS2X_IS_ANDROID)
     add_library(ps2EntryRunner SHARED
@@ -484,10 +529,12 @@ else()
     )
 endif()
 
+target_include_directories(ps2EntryRunner PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+
 if(PS2X_ENABLE_RUNNER_UNITY_BUILD)
     # Keep the hand-written runner entry point out of the generated-code unity
     # batches so editing it does not recompile recompiled game functions.
-    set_source_files_properties("${ROOT_MAIN_CPP}" "${RUNNER_MAIN_CPP}" "${PS2X_PROFILER_CPP}" PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+    set_source_files_properties("${ROOT_MAIN_CPP}" "${RUNNER_MAIN_CPP}" "${PS2X_PROFILER_CPP}" "${PS2X_GAME_MAIN_CPP}" PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
     set_target_properties(ps2EntryRunner PROPERTIES
         UNITY_BUILD ON
         UNITY_BUILD_BATCH_SIZE "${PS2X_RUNNER_UNITY_BUILD_BATCH_SIZE}"
@@ -590,11 +637,42 @@ if(PS2X_VU1_MICROCODE_DIR AND PS2X_VU1_GENERATOR_SOURCE AND NOT PS2X_IS_ANDROID 
 endif()
 
 if(PS2X_ENABLE_DEBUG_UI AND NOT PS2X_IS_VITA AND NOT PS2X_IS_ANDROID)
-    target_sources(ps2EntryRunner PRIVATE
-        src/lib/ps2_debug_panel.cpp
-    )
-    target_link_libraries(ps2EntryRunner PRIVATE rlImGui imgui)
-    target_compile_definitions(ps2EntryRunner PRIVATE PS2X_ENABLE_DEBUG_UI=1)
+    if(PS2X_SHARED_RUNTIME)
+        target_sources(ps2_runtime PRIVATE
+            src/lib/ps2_debug_panel.cpp
+        )
+        target_link_libraries(ps2_runtime PRIVATE rlImGui imgui)
+        target_compile_definitions(ps2_runtime PRIVATE PS2X_ENABLE_DEBUG_UI=1)
+    else()
+        target_sources(ps2EntryRunner PRIVATE
+            src/lib/ps2_debug_panel.cpp
+        )
+        target_link_libraries(ps2EntryRunner PRIVATE rlImGui imgui)
+        target_compile_definitions(ps2EntryRunner PRIVATE PS2X_ENABLE_DEBUG_UI=1)
+    endif()
+endif()
+
+if(PS2X_SHARED_RUNTIME)
+    # Static libraries linked into the shared runtime must be position independent.
+    foreach(pic_target IN ITEMS ps2_iop raylib imgui rlImGui)
+        if(TARGET ${pic_target})
+            set_target_properties(${pic_target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        endif()
+    endforeach()
+    # A new runtime library must not relink the executable (nor the VU1 generator, which would regenerate and
+    # recompile the compiled microcode).
+    set_target_properties(ps2EntryRunner PROPERTIES LINK_DEPENDS_NO_SHARED ON)
+    if(TARGET ps2x_vu1_generator)
+        set_target_properties(ps2x_vu1_generator PROPERTIES LINK_DEPENDS_NO_SHARED ON)
+    endif()
+    if(WIN32)
+        # ps2runtime.dll next to the executable; MinGW exports every symbol by default.
+        set_target_properties(ps2_runtime PROPERTIES OUTPUT_NAME ps2runtime PREFIX "")
+    else()
+        set_target_properties(ps2EntryRunner PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
+        set_target_properties(ps2_runtime PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+    endif()
+    message(STATUS "Runtime: shared library (ABI ${PS2X_ABI_HASH})")
 endif()
 
 ps2x_stage_ffmpeg_runtime_dlls(ps2EntryRunner)

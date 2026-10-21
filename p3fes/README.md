@@ -33,6 +33,19 @@ own disc and are generated locally.
    compiled to C++ and linked in; microcode that wasn't captured is still interpreted. The captured
    micromemories and the generated C++ are game data: keep them out of the repository.
 
+## Engine updates
+
+The runtime is a shared library (`ps2runtime.dll` / `libps2_runtime.so`, CMake option `PS2X_SHARED_RUNTIME`, on by
+default on desktop). The executable only holds the recompiled code, the compiled VU1 microcode and a small `main`
+(`ps2xRuntime/src/game_main.cpp`) that hands the function table to the runtime. Fixes to the runtime therefore ship
+as a new library without rebuilding the recompiled code.
+
+`p3fes/scripts/publish_dev_build.sh <windows build dir> "<notes>"` pushes the Windows engine (no game code: the
+script only publishes a fixed list of files) to the `dev-builds` branch, and `Update.bat` / `Update.ps1`
+(`p3fes/launcher/`) download it next to an existing install. `ps2x_abi.h` holds a hash of the runtime headers the
+recompiled code depends on: the executable passes its hash to the runtime, which warns on a mismatch, and the updater
+refuses an engine whose hash differs from the install's `game_abi.txt`.
+
 ## Status
 
 See the [project README](../README.md#status).

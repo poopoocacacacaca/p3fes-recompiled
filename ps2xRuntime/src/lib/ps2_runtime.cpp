@@ -42,14 +42,29 @@ namespace
     std::atomic<ps2x::iop::IopSubsystem *> g_spu2AudioSource{nullptr};
     AudioStream g_spu2Stream{};
     bool g_spu2StreamActive = false;
-    constexpr size_t kSpu2MaxLatencyFrames = 4800u; // 100 ms a 48 kHz
+    constexpr size_t kSpu2MaxLatencyFrames = 9600u; // 200 ms at 48 kHz: beyond that the oldest samples are dropped
+    constexpr size_t kSpu2PrimeFrames = 2400u;      // 50 ms queued before output starts (or restarts)
 
     void spu2AudioCallback(void *buffer, unsigned int frames)
     {
         int16_t *out = static_cast<int16_t *>(buffer);
         size_t produced = 0u;
+        // Jitter buffer: the SPU2 produces samples in bursts (per IOP slice) and, when emulation runs behind, less
+        // than real time. Draining whatever is there each callback turned that into a click every few milliseconds.
+        // Output waits until kSpu2PrimeFrames are queued, and after running dry waits again, so short shortfalls
+        // become rare short gaps instead of constant crackle.
+        static bool primed = false;
         if (ps2x::iop::IopSubsystem *source = g_spu2AudioSource.load(std::memory_order_acquire))
-            produced = source->drainAudio(out, frames, kSpu2MaxLatencyFrames);
+        {
+            if (!primed && source->pendingAudioFrames() >= kSpu2PrimeFrames + frames)
+                primed = true;
+            if (primed)
+            {
+                produced = source->drainAudio(out, frames, kSpu2MaxLatencyFrames);
+                if (produced < frames)
+                    primed = false;
+            }
+        }
         // PS2X_AUDIO_DUMP=<file> saves the emulated samples (s16le, stereo, 48 kHz) without the filler silence, to
         // check the audio even when emulation runs slower than real time.
         static std::FILE *pcm = []() -> std::FILE *
@@ -1174,21 +1189,31 @@ void PS2Runtime::configureIoPathsFromElf(const std::string &elfPath)
 
 namespace
 {
+    PS2RecompiledFunctionTable g_functionTable;
+}
+
+void ps2SetRecompiledFunctionTable(const PS2RecompiledFunctionTable &table)
+{
+    g_functionTable = table;
+}
+
+namespace
+{
     bool generatedFunctionTableSlot(uint32_t address, uint32_t &slot)
     {
-        if ((address & 3u) != 0u || g_ps2RecompiledFunctionTableSlotCount == 0u)
+        if ((address & 3u) != 0u || g_functionTable.slotCount == 0u)
         {
             return false;
         }
 
-        if (address < g_ps2RecompiledFunctionTableBase || address >= g_ps2RecompiledFunctionTableEnd)
+        if (address < g_functionTable.base || address >= g_functionTable.end)
         {
             return false;
         }
 
-        const uint32_t offset = address - g_ps2RecompiledFunctionTableBase;
+        const uint32_t offset = address - g_functionTable.base;
         slot = offset >> 2;
-        return slot < g_ps2RecompiledFunctionTableSlotCount;
+        return slot < g_functionTable.slotCount;
     }
 }
 
@@ -1198,13 +1223,13 @@ bool PS2Runtime::replaceFunction(uint32_t address, RecompiledFunction func)
     if (!generatedFunctionTableSlot(address, slot))
     {
         std::cerr << "[function-table] cannot replace guest PC 0x" << std::hex << address
-                  << ": outside generated dense table [0x" << g_ps2RecompiledFunctionTableBase
-                  << ", 0x" << g_ps2RecompiledFunctionTableEnd << ")"
+                  << ": outside generated dense table [0x" << g_functionTable.base
+                  << ", 0x" << g_functionTable.end << ")"
                   << std::dec << std::endl;
         return false;
     }
 
-    g_ps2RecompiledFunctionTable[slot] = func;
+    g_functionTable.table[slot] = func;
     return true;
 }
 
@@ -1216,7 +1241,7 @@ bool PS2Runtime::registerFunction(uint32_t address, RecompiledFunction func)
 bool PS2Runtime::hasFunction(uint32_t address) const
 {
     uint32_t slot = 0u;
-    return generatedFunctionTableSlot(address, slot) && g_ps2RecompiledFunctionTable[slot] != nullptr;
+    return generatedFunctionTableSlot(address, slot) && g_functionTable.table[slot] != nullptr;
 }
 
 const char *describeGuestBranchKind(PS2Runtime::GuestBranchKind kind)
@@ -1245,7 +1270,7 @@ PS2Runtime::RecompiledFunction PS2Runtime::lookupFunction(uint32_t address)
     uint32_t slot = 0u;
     if (generatedFunctionTableSlot(address, slot))
     {
-        RecompiledFunction fn = g_ps2RecompiledFunctionTable[slot];
+        RecompiledFunction fn = g_functionTable.table[slot];
         if (fn != nullptr)
         {
             return fn;
@@ -1253,8 +1278,8 @@ PS2Runtime::RecompiledFunction PS2Runtime::lookupFunction(uint32_t address)
     }
 
     std::cerr << "Error: No exact recompiled function for guest PC 0x" << std::hex << address
-              << " tableBase=0x" << g_ps2RecompiledFunctionTableBase
-              << " tableEnd=0x" << g_ps2RecompiledFunctionTableEnd
+              << " tableBase=0x" << g_functionTable.base
+              << " tableEnd=0x" << g_functionTable.end
               << " codeRegion=" << (m_memory.isCodeAddress(address) ? "yes" : "no")
               << " trace=" << formatDispatchHistory()
               << std::dec << std::endl;

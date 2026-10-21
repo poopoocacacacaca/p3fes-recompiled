@@ -249,6 +249,11 @@ namespace ps2x::iop
         return m_impl->emulator.isMemoryRange(address, size);
     }
 
+    size_t IopSubsystem::pendingAudioFrames() const
+    {
+        return m_impl->emulator.pendingAudioFrames();
+    }
+
     size_t IopSubsystem::drainAudio(int16_t *stereo, size_t maxFrames, size_t maxLatencyFrames)
     {
         return m_impl->emulator.drainAudio(stereo, maxFrames, maxLatencyFrames);

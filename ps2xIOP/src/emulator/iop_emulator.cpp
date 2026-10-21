@@ -1033,6 +1033,11 @@ namespace ps2x::iop::detail
         return m_impl->memory.spu2().drainOutput(stereo, maxFrames, maxLatencyFrames);
     }
 
+    size_t IopEmulator::pendingAudioFrames() const
+    {
+        return m_impl->memory.spu2().pendingFrames();
+    }
+
     uint64_t IopEmulator::cycles() const noexcept
     {
         return m_impl->totalCycles;

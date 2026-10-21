@@ -38,6 +38,7 @@ namespace ps2x::iop::detail
 
         // 48 kHz stereo samples produced by the SPU2 (see Spu2::drainOutput).
         size_t drainAudio(int16_t *stereo, size_t maxFrames, size_t maxLatencyFrames);
+        size_t pendingAudioFrames() const;
         [[nodiscard]] uint64_t cycles() const noexcept;
         [[nodiscard]] uint64_t instructions() const noexcept;
         [[nodiscard]] uint32_t loadedModuleCount() const noexcept;
