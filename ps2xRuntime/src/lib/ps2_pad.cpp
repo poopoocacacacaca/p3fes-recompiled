@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+extern uint64_t g_path3TraceVsync; // the current vsync count (ps2_memory.cpp)
+
 namespace
 {
     constexpr uint8_t kPadAnalogMarker = 0x73;
@@ -96,8 +98,12 @@ namespace
         const auto &script = padScript();
         if (script.empty())
             return 0u;
+        // PS2X_PAD_SCRIPT_CLOCK=fields: times count emulated time (vsyncs / 59.94) instead of wall time, so a
+        // script hits the same game moment however fast the host runs.
+        static const bool fieldClock = [] { const char *v = std::getenv("PS2X_PAD_SCRIPT_CLOCK"); return v && std::string(v) == "fields"; }();
         static const auto t0 = std::chrono::steady_clock::now();
-        const double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        const double now = fieldClock ? static_cast<double>(g_path3TraceVsync) * 1001.0 / 60000.0
+                                      : std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         uint16_t mask = 0u;
         for (const ScriptedPress &press : script)
         {

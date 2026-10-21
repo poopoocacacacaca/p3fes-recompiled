@@ -467,6 +467,29 @@ namespace
                     m_statStart = now;
                 }
             }
+            // Debug aid: PS2X_PCSX2_SHOTS=<dir>:<every N fields> writes the presented field as a PPM every N fields
+            // (named by field number), so test captures follow emulated time rather than wall time.
+            {
+                static const std::pair<std::string, uint64_t> shots = []() -> std::pair<std::string, uint64_t> {
+                    const char *v = std::getenv("PS2X_PCSX2_SHOTS");
+                    const char *c = v ? std::strrchr(v, ':') : nullptr;
+                    return c ? std::pair<std::string, uint64_t>{std::string(v, c), std::strtoull(c + 1, nullptr, 10)}
+                             : std::pair<std::string, uint64_t>{{}, 0u};
+                }();
+                ++m_presented;
+                if (shots.second && m_presented % shots.second == 0u)
+                {
+                    char path[512];
+                    std::snprintf(path, sizeof(path), "%s/f%07llu.ppm", shots.first.c_str(), (unsigned long long)m_presented);
+                    if (std::FILE *f = std::fopen(path, "wb"))
+                    {
+                        std::fprintf(f, "P6\n%u %u\n255\n", w, h);
+                        for (size_t i = 0; i < static_cast<size_t>(w) * h; ++i)
+                            std::fwrite(reinterpret_cast<const uint8_t *>(pixels + i), 1, 3, f);
+                        std::fclose(f);
+                    }
+                }
+            }
             std::lock_guard<std::mutex> lock(m_frameMutex);
             m_frame.resize(static_cast<size_t>(w) * h * 4u);
             std::memcpy(m_frame.data(), pixels, m_frame.size());
@@ -495,6 +518,7 @@ namespace
         std::vector<uint8_t> m_frame;
         uint32_t m_frameWidth = 0, m_frameHeight = 0;
         uint64_t m_frameSerial = 0;
+        uint64_t m_presented = 0;
         bool m_statsEnabled = std::getenv("PS2X_PCSX2_STATS") != nullptr;
         uint32_t m_statFields = 0;
         std::chrono::steady_clock::time_point m_statStart = std::chrono::steady_clock::now();
