@@ -470,8 +470,29 @@ void EeScheduler::postEvent(EeEvent event)
     m_eventCv.notify_one();
 }
 
+namespace
+{
+    // Busy EE cycles charged since the last vblank (for PS2X_EE_CYCLE_STATS).
+    uint64_t g_busyCyclesThisField = 0u;
+    uint64_t g_busyCyclesSum = 0u;
+    uint64_t g_busyCyclesMax = 0u;
+    uint32_t g_busyFields = 0u;
+}
+
 bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
 {
+    // The generated code charges a flat amount per loop back edge and per call, far below what the PS2 spends:
+    // measured on Persona 3 FES, a 3D frame is charged ~1.25 M cycles of a 4.92 M field, so every frame finished in one
+    // field and the game ran its 30 fps 3D logic at 60 (twice the speed). PS2X_EE_CYCLE_SCALE (default 4) multiplies
+    // the charge: 3D frames then overrun a field like on the console (30 fps), while menus (~0.45 M) stay at 60.
+    static const uint32_t cycleScale = []
+    {
+        const char *v = std::getenv("PS2X_EE_CYCLE_SCALE");
+        const long n = v ? std::strtol(v, nullptr, 10) : 4;
+        return static_cast<uint32_t>(n < 1 ? 1 : (n > 64 ? 64 : n));
+    }();
+    cycles *= cycleScale;
+    g_busyCyclesThisField += cycles; // charged by guest code (generated back edges, dispatches)
     accountCycles(cycles);
 
     if (m_checkpointPending.load(std::memory_order_acquire) ||
@@ -2073,6 +2094,23 @@ void EeScheduler::processDueDeadlines()
         {
             if (scheduled.event.type == EeEventType::VBlankStart)
             {
+                // PS2X_EE_CYCLE_STATS=1: every 300 fields, average / max busy EE cycles charged per field, against the
+                // 4.92 M a field lasts. Shows how far the generated code's cycle estimates are from a real frame's cost.
+                static const bool cycleStats = std::getenv("PS2X_EE_CYCLE_STATS") != nullptr;
+                if (cycleStats)
+                {
+                    g_busyCyclesSum += g_busyCyclesThisField;
+                    g_busyCyclesMax = std::max(g_busyCyclesMax, g_busyCyclesThisField);
+                    if (++g_busyFields >= 300u)
+                    {
+                        std::fprintf(stderr, "[ee-cycles] field %llu: busy avg %.2f M max %.2f M per field (field = %.2f M)\n",
+                                     (unsigned long long)m_vsyncTick, g_busyCyclesSum / 300.0 / 1e6, g_busyCyclesMax / 1e6,
+                                     kVBlankPeriodCycles / 1e6);
+                        g_busyCyclesSum = g_busyCyclesMax = 0u;
+                        g_busyFields = 0u;
+                    }
+                }
+                g_busyCyclesThisField = 0u;
                 // Pace against the host clock, but never "catch up": after a stretch slower than real time
                 // (loading, a heavy scene), restart the schedule from now instead of running fields back to back.
                 auto hostBase = scheduled.hostDeadline;

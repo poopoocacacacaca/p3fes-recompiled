@@ -1,4 +1,5 @@
 #include "Common.h"
+#include <cstdio>
 #include "Interrupt.h"
 
 namespace ps2_syscalls
@@ -36,6 +37,10 @@ namespace ps2_syscalls
                                               getRegU32(ctx, 7),
                                               getRegU32(ctx, 28),
                                               getRegU32(ctx, 29));
+            // Always logged (rare): which interrupt causes the game hooks, and with which handler.
+            std::fprintf(stderr, "[intc] Add%sHandler cause=%u handler=%08x next=%d arg=%08x -> id %d (ra=%08x)\n",
+                         dmac ? "Dmac" : "Intc", getRegU32(ctx, 4), getRegU32(ctx, 5), (int)getRegU32(ctx, 6),
+                         getRegU32(ctx, 7), id, getRegU32(ctx, 31));
             setReturnS32(ctx, id);
         }
 

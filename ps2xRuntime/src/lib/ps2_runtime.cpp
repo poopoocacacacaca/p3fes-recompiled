@@ -44,6 +44,10 @@ namespace
     bool g_spu2StreamActive = false;
     constexpr size_t kSpu2MaxLatencyFrames = 9600u; // 200 ms at 48 kHz: beyond that the oldest samples are dropped
     constexpr size_t kSpu2PrimeFrames = 2400u;      // 50 ms queued before output starts (or restarts)
+    // Output health for the [speed] log line: times the output ran dry, and frames dropped for latency.
+    std::atomic<uint32_t> g_audioUnderruns{0u};
+    std::atomic<uint32_t> g_audioDroppedFrames{0u};
+    std::atomic<uint32_t> g_audioQueuedFrames{0u};
 
     void spu2AudioCallback(void *buffer, unsigned int frames)
     {
@@ -58,11 +62,19 @@ namespace
         {
             if (!primed && source->pendingAudioFrames() >= kSpu2PrimeFrames + frames)
                 primed = true;
+            const size_t pending = source->pendingAudioFrames();
+            g_audioQueuedFrames.store(static_cast<uint32_t>(pending), std::memory_order_relaxed);
             if (primed)
             {
+                if (pending > frames + kSpu2MaxLatencyFrames)
+                    g_audioDroppedFrames.fetch_add(static_cast<uint32_t>(pending - frames - kSpu2MaxLatencyFrames),
+                                                   std::memory_order_relaxed);
                 produced = source->drainAudio(out, frames, kSpu2MaxLatencyFrames);
                 if (produced < frames)
+                {
                     primed = false;
+                    g_audioUnderruns.fetch_add(1u, std::memory_order_relaxed);
+                }
             }
         }
         // PS2X_AUDIO_DUMP=<file> saves the emulated samples (s16le, stereo, 48 kHz) without the filler silence, to
@@ -2769,17 +2781,40 @@ void PS2Runtime::run()
             {
                 const uint64_t tick = m_eeScheduler->currentVSyncTick();
                 const double vps = static_cast<double>(tick - windowTick) / secs;
+                // Game updates per second: Persona 3 FES's kwlnUpdate counts its frames at 0x7CE10C (gp - 0x4BE4);
+                // PS2X_FRAME_COUNTER_ADDR overrides it (0 = off).
+                static const uint32_t frameCounterAddr = []
+                {
+                    const char *v = std::getenv("PS2X_FRAME_COUNTER_ADDR");
+                    return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 0)) : 0x7CE10Cu;
+                }();
+                static uint32_t lastFrames = 0u;
+                double fps = -1.0;
+                if (frameCounterAddr != 0u && frameCounterAddr + 4u <= PS2_RAM_SIZE && m_memory.getRDRAM())
+                {
+                    uint32_t frames = 0u;
+                    std::memcpy(&frames, m_memory.getRDRAM() + frameCounterAddr, sizeof(frames));
+                    fps = static_cast<double>(frames - lastFrames) / secs;
+                    lastFrames = frames;
+                }
                 windowStart = now;
                 windowTick = tick;
                 if (baseTitle.empty())
                     baseTitle = g_hostWindowTitle;
                 char title[256];
-                std::snprintf(title, sizeof(title), "%s | %.1f VPS (%.0f%%)", baseTitle.c_str(), vps, vps * 100.0 / 59.94);
+                if (fps >= 0.0 && fps < 1000.0)
+                    std::snprintf(title, sizeof(title), "%s | %.0f FPS | %.1f VPS (%.0f%%)", baseTitle.c_str(), fps, vps,
+                                  vps * 100.0 / 59.94);
+                else
+                    std::snprintf(title, sizeof(title), "%s | %.1f VPS (%.0f%%)", baseTitle.c_str(), vps, vps * 100.0 / 59.94);
                 SetWindowTitle(title);
                 if (++logCountdown >= 5)
                 {
                     logCountdown = 0;
-                    std::fprintf(stderr, "[speed] %.1f vblanks/s (%.0f%% of a PS2)\n", vps, vps * 100.0 / 59.94);
+                    std::fprintf(stderr, "[speed] %.1f vblanks/s (%.0f%% of a PS2), %.1f game frames/s; audio: %u underruns, "
+                                         "%u frames dropped, %u queued\n",
+                                 vps, vps * 100.0 / 59.94, fps, g_audioUnderruns.exchange(0u),
+                                 g_audioDroppedFrames.exchange(0u), g_audioQueuedFrames.load());
                 }
             }
         }
