@@ -149,7 +149,7 @@ done = 0.85
 [[phase]]
 name = "Renderer"
 weight = 15
-done = 0.6
+done = 0.65
 [[phase]]
 name = "Title"
 weight = 10
@@ -157,7 +157,7 @@ done = 1.0
 [[phase]]
 name = "Field / Tartarus"
 weight = 15
-done = 0.1
+done = 0.2
 [[phase]]
 name = "Battles"
 weight = 10

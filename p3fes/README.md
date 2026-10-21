@@ -27,6 +27,11 @@ own disc and are generated locally.
    `PS2X_ENABLE_LTO=OFF`).
 5. Put `ps2EntryRunner.exe`, `run.bat`, `SLUS_216.21`, `SYSTEM.CNF`, `LIB31\` and
    the `.CVM` files from your disc in one folder and run `run.bat`.
+6. Optional, about 3x faster 3D: run once with `PS2X_VU1_CAPTURE=<folder>` through the scenes you
+   want, then reconfigure with `-DPS2X_VU1_MICROCODE_DIR=<folder>` and
+   `-DPS2X_VU1_GENERATOR_SOURCE=p3fes/tools/vu1/generar_vu1.cpp` and rebuild. The VU1 microcode is
+   compiled to C++ and linked in; microcode that wasn't captured is still interpreted. The captured
+   micromemories and the generated C++ are game data: keep them out of the repository.
 
 ## Status
 

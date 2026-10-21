@@ -33,8 +33,9 @@ The game's MIPS R5900 code is statically recompiled to C++ and run on a reimplem
 
 **Where it stands:** the game boots from its own CVM archives, detects the memory card and controller, plays the opening movie with sound through PCSX2's GS, and reaches the title screen and the *The Journey* / *The Answer* menu. **New Game works:** the FES introduction, the data
 transfer prompt, the opening anime, the contract and name entry, and the first 3D scene in the dorm with Mitsuru and Yukari,
-all rendered correctly. Menus and movies run at about full speed; 3D scenes are slow (about 5 fps on the 2-core test VM)
-because VU1 microcode is still interpreted. Next up: compiled VU1 and getting to the first Dark Hour.
+all rendered correctly, then the dorm tour and free movement at school. Menus and movies run at about full speed; with
+VU1 microcode compiled ahead of time, 3D scenes run about 3x faster than interpreted but still below full speed on the
+2-core test VM. Next up: the first Dark Hour, and more speed.
 
 | Milestone | |
 |---|:---:|
@@ -48,7 +49,9 @@ because VU1 microcode is still interpreted. Next up: compiled VU1 and getting to
 | Main menu (*The Journey* / *The Answer*) | ✅ |
 | New Game: introduction, opening anime, name entry | ✅ |
 | First 3D scene (dorm) renders correctly | ✅ |
-| 3D scenes at full speed (compiled VU1) | 🔧 |
+| Compiled VU1 microcode (about 3x faster 3D) | ✅ |
+| Free movement (school, dorm) | ✅ |
+| 3D scenes at full speed | 🔧 |
 | Field, Tartarus, battles, events | ⏳ |
 | Widescreen, upscaling, 60 FPS | ⏳ |
 
@@ -159,8 +162,8 @@ Debug traces: `PS2X_SPU2_DIAG`, `PS2X_GS_DIAG`, `PS2X_IPU_TRACE`, `PS2X_DMA_LOG`
 
 - Logo lettering: [Faktos](https://maylett.net/cmd/faktos.html) and [BM Space](https://www.dafont.com/bm-space.font) (free font).
 - [PS2Recomp](https://github.com/ran-j/PS2Recomp) by ran-j and contributors: the recompiler and runtime this port is built on.
-- [god-of-war-recomp](https://github.com/KIexster/god-of-war-recomp) by KIexster: SPU2, SIO2, IOP and VU1 work and many
-  EE/GS fixes, merged here, plus the status map design.
+- [god-of-war-recomp](https://github.com/KIexster/god-of-war-recomp) by KIexster: SPU2, SIO2, IOP and VU1 work, the VU1
+  microcode compiler (`p3fes/tools/vu1/generar_vu1.cpp`) and many EE/GS fixes, merged here, plus the status map design.
 - Taylor N. Albarnaz / LightVelox's Shadow of the Colossus fork of PS2Recomp: the OpenGL GS backend (via god-of-war-recomp).
 - [urban-reign-recomp](https://github.com/thiagordsfx/urban-reign-recomp) by thiagordsfx: the PCSX2 GS bridge design.
 - [PCSX2](https://github.com/PCSX2/pcsx2): the IPU and GS, and the accuracy reference.
