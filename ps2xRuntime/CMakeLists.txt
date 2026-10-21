@@ -553,8 +553,18 @@ set(PS2X_VU1_GENERATOR_SOURCE "" CACHE FILEPATH "C++ generator for VU1 microcode
 if(PS2X_VU1_MICROCODE_DIR AND PS2X_VU1_GENERATOR_SOURCE AND NOT PS2X_IS_ANDROID AND NOT PS2X_IS_VITA)
     file(GLOB PS2X_VU1_IMAGES CONFIGURE_DEPENDS "${PS2X_VU1_MICROCODE_DIR}/*.bin")
     if(PS2X_VU1_IMAGES)
-        add_executable(ps2x_vu1_generator "${PS2X_VU1_GENERATOR_SOURCE}")
-        target_link_libraries(ps2x_vu1_generator PRIVATE ps2_runtime)
+        # Cross builds: PS2X_VU1_GENERATOR_EXECUTABLE is a generator built for the host (e.g. the Linux build's
+        # ps2x_vu1_generator), since a generator built for the target can't run during the build.
+        set(PS2X_VU1_GENERATOR_EXECUTABLE "" CACHE FILEPATH "Host-built VU1 generator (cross builds)")
+        if(PS2X_VU1_GENERATOR_EXECUTABLE)
+            set(PS2X_VU1_GENERATOR_COMMAND "${PS2X_VU1_GENERATOR_EXECUTABLE}")
+            set(PS2X_VU1_GENERATOR_DEPENDS "${PS2X_VU1_GENERATOR_EXECUTABLE}")
+        else()
+            add_executable(ps2x_vu1_generator "${PS2X_VU1_GENERATOR_SOURCE}")
+            target_link_libraries(ps2x_vu1_generator PRIVATE ps2_runtime)
+            set(PS2X_VU1_GENERATOR_COMMAND "$<TARGET_FILE:ps2x_vu1_generator>")
+            set(PS2X_VU1_GENERATOR_DEPENDS ps2x_vu1_generator)
+        endif()
         set(PS2X_VU1_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/vu1_generado")
         set(PS2X_VU1_GENERATED_PARTS)
         foreach(part RANGE 0 12)
@@ -563,8 +573,8 @@ if(PS2X_VU1_MICROCODE_DIR AND PS2X_VU1_GENERATOR_SOURCE AND NOT PS2X_IS_ANDROID 
         add_custom_command(OUTPUT ${PS2X_VU1_GENERATED_PARTS}
             COMMAND "${CMAKE_COMMAND}" -E make_directory "${PS2X_VU1_GENERATED_DIR}"
             # The folder, not each file: thousands of paths exceed the Windows command line.
-            COMMAND "$<TARGET_FILE:ps2x_vu1_generator>" "${PS2X_VU1_GENERATED_DIR}" "${PS2X_VU1_MICROCODE_DIR}"
-            DEPENDS ps2x_vu1_generator ${PS2X_VU1_IMAGES}
+            COMMAND "${PS2X_VU1_GENERATOR_COMMAND}" "${PS2X_VU1_GENERATED_DIR}" "${PS2X_VU1_MICROCODE_DIR}"
+            DEPENDS ${PS2X_VU1_GENERATOR_DEPENDS} ${PS2X_VU1_IMAGES}
             VERBATIM)
         target_sources(ps2EntryRunner PRIVATE ${PS2X_VU1_GENERATED_PARTS})
         set_source_files_properties(${PS2X_VU1_GENERATED_PARTS} PROPERTIES
