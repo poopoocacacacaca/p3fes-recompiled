@@ -1,0 +1,1 @@
+Pairs with the new ps2EntryRunner.exe (day-change hang fix). Extra sound diagnostics in the log.
