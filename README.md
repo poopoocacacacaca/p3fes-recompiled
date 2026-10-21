@@ -31,7 +31,7 @@ The game's MIPS R5900 code is statically recompiled to C++ and run on a reimplem
 
 <sub>Generated from <a href="p3fes/status/status.toml"><code>p3fes/status/status.toml</code></a> by <code>p3fes/scripts/status_chart.py</code>. 🟩 working · 🟦 partial · 🟥 pending.</sub>
 
-**Where it stands:** the game boots from its own CVM archives, detects the memory card and controller, plays the opening movie with sound through PCSX2's GS, and reaches the title screen and the *The Journey* / *The Answer* menu. The menu background is still corrupted, and the 2-core test VM runs at about 0.75× speed with the EE/IOP thread as the bottleneck. Next up: the menu background, then New Game.
+**Where it stands:** the game boots from its own CVM archives, detects the memory card and controller, plays the opening movie with sound through PCSX2's GS, and reaches the title screen and the *The Journey* / *The Answer* menu. The main menu renders correctly, and the 2-core test VM runs at about 0.75× speed with the EE/IOP thread as the bottleneck. Next up: the menu background, then New Game.
 
 | Milestone | |
 |---|:---:|
@@ -42,7 +42,7 @@ The game's MIPS R5900 code is statically recompiled to C++ and run on a reimplem
 | PCSX2 GS renderer (OpenGL / software) | ✅ |
 | Movies at full speed | 🔧 |
 | Title screen | ✅ |
-| Menus (*The Journey* / *The Answer* background) | 🔧 |
+| Main menu (*The Journey* / *The Answer*) | ✅ |
 | Field, Tartarus, battles, events | ⏳ |
 | Widescreen, upscaling, 60 FPS | ⏳ |
 

@@ -16,6 +16,9 @@
 #include <string>
 #include <vector>
 
+extern bool g_path3ReleasePending; // defined with flushMaskedPath3Packets below
+void path3Trace(const char *event, size_t bytes);
+
 namespace
 {
     inline void inRange(uint32_t offset, size_t bytes, size_t regionSize, const char *op, uint32_t address)
@@ -2471,6 +2474,12 @@ void PS2Memory::processPendingTransfers()
     }
     if (hadVif1)
     {
+        // The VIF1 chain ended with PATH3 unmasked: the GIF has the rest of the frame to drain what waits.
+        if (g_path3ReleasePending && !m_path3Masked)
+        {
+            path3Trace("flushall-chain-end", 0u);
+            flushMaskedPath3Packets();
+        }
         raiseDStatChannel(1u); // VIF1 channel
         queueCompletedDmacCause(1u);
         m_ioRegisters[VIF1_CHANNEL + 0x00] &= ~0x100u;
@@ -2539,10 +2548,97 @@ std::vector<uint32_t> PS2Memory::consumeCompletedDmacCauses()
     return causes;
 }
 
+// PATH3 masking as the GS interface behaves: an unmask that is followed by a mask again (the pulse games such as
+// Persona 3 FES use between VIF1 draws) lets exactly one queued GIF packet through, so each texture upload lands
+// right before the draw that uses it. Other GIF traffic after an unmask, a vsync or new PATH3 data while unmasked
+// release everything that waits. (Idea from Virtual-AK/fes-pc-recomp's ps2run_fix_path3_mask.py.)
+bool g_path3ReleasePending = false; // unmasked with packets waiting; nothing released yet
+bool g_path3ReleaseOne = false;     // flushMaskedPath3Packets releases one packet only
+
+// Debug aid: PS2X_PATH3_TRACE=<from_vsync> logs PATH3 mask events and releases from that vsync for 2 fields.
+void path3Trace(const char *event, size_t bytes)
+{
+    static const long long from = [] { const char *v = std::getenv("PS2X_PATH3_TRACE"); return v ? std::atoll(v) : -1ll; }();
+    extern uint64_t g_path3TraceVsync;
+    if (from >= 0 && g_path3TraceVsync >= static_cast<uint64_t>(from) && g_path3TraceVsync < static_cast<uint64_t>(from) + 2u)
+        std::fprintf(stderr, "[p3] v=%llu %s %zu\n", (unsigned long long)g_path3TraceVsync, event, bytes);
+}
+uint64_t g_path3TraceVsync = 0;
+
+namespace
+{
+    // Bytes of the GIF packet (tags up to and including the first with EOP) at the front of data. hasImage says
+    // whether it carries IMAGE data.
+    size_t gifPacketBytes(const uint8_t *data, size_t size, bool *hasImage = nullptr)
+    {
+        size_t at = 0;
+        if (hasImage)
+            *hasImage = false;
+        while (at + 16u <= size)
+        {
+            uint64_t tag;
+            std::memcpy(&tag, data + at, 8);
+            const uint32_t nloop = static_cast<uint32_t>(tag) & 0x7FFFu;
+            const uint32_t flg = static_cast<uint32_t>(tag >> 58) & 3u;
+            uint32_t nreg = static_cast<uint32_t>(tag >> 60) & 0xFu;
+            if (nreg == 0u)
+                nreg = 16u;
+            const bool eop = ((tag >> 15) & 1u) != 0u;
+            if (hasImage && flg >= 2u && nloop != 0u)
+                *hasImage = true;
+            const uint64_t body = flg == 0u ? uint64_t(nloop) * nreg
+                                  : flg == 1u ? (uint64_t(nloop) * nreg + 1u) / 2u
+                                              : uint64_t(nloop);
+            at += 16u + static_cast<size_t>(body) * 16u;
+            if (eop)
+                break;
+        }
+        return std::min(at, size);
+    }
+}
+
 void PS2Memory::flushMaskedPath3Packets(bool drainImmediately)
 {
     if (m_path3Masked || m_path3MaskedFifo.empty())
+    {
+        if (m_path3MaskedFifo.empty())
+            g_path3ReleasePending = false;
         return;
+    }
+    if (g_path3ReleaseOne)
+    {
+        // Gather the queue into one span, release its first packet, keep the rest.
+        std::vector<uint8_t> all;
+        for (const auto &packet : m_path3MaskedFifo)
+            all.insert(all.end(), packet.begin(), packet.end());
+        m_path3MaskedFifo.clear();
+        // One packet, plus the packets after it while what was released carried no image: a register-only packet
+        // finishes at once, so the GIF starts the next one before the mask comes back.
+        size_t n = 0;
+        bool hasImage = false;
+        while (n < all.size() && !hasImage)
+        {
+            const size_t step = gifPacketBytes(all.data() + n, all.size() - n, &hasImage);
+            if (step == 0u)
+                break;
+            n += step;
+        }
+        path3Trace("release-one", n);
+        if (n >= 16u)
+        {
+            if (m_gifArbiter)
+                m_gifArbiter->submit(GifPathId::Path3, all.data(), static_cast<uint32_t>(n), false);
+            else if (m_gifPacketCallback)
+                m_gifPacketCallback(all.data(), static_cast<uint32_t>(n));
+        }
+        if (n < all.size())
+            m_path3MaskedFifo.emplace_back(all.begin() + static_cast<std::ptrdiff_t>(n), all.end());
+        g_path3ReleasePending = false;
+        if (m_gifArbiter && drainImmediately)
+            m_gifArbiter->drain();
+        return;
+    }
+    g_path3ReleasePending = false;
 
     auto emit = [&](const uint8_t *packetData, uint32_t packetSize)
     {
@@ -2573,10 +2669,17 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t 
     {
         if (m_path3Masked)
         {
+            path3Trace("queue", sizeBytes);
             m_path3MaskedFifo.emplace_back(data, data + sizeBytes);
             return;
         }
+        path3Trace("direct3", sizeBytes);
         flushMaskedPath3Packets(false);
+    }
+    else if (g_path3ReleasePending && !m_path3Masked)
+    {
+        path3Trace(pathId == GifPathId::Path1 ? "flushall-by-p1" : "flushall-by-p2", sizeBytes);
+        flushMaskedPath3Packets(false); // the game moved on without masking again: PATH3 drains first
     }
 
     if (m_gifArbiter)

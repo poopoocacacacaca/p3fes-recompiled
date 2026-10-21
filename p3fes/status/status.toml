@@ -153,7 +153,7 @@ done = 0.45
 [[phase]]
 name = "Title"
 weight = 10
-done = 0.5
+done = 0.9
 [[phase]]
 name = "Field / Tartarus"
 weight = 15

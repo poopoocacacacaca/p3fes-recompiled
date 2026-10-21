@@ -9,6 +9,10 @@
 #include <cstdio>
 #include <cstdlib>
 
+extern bool g_path3ReleasePending; // ps2_memory.cpp
+extern bool g_path3ReleaseOne;
+void path3Trace(const char *event, size_t bytes); // ps2_memory.cpp, PS2X_PATH3_TRACE
+
 enum VIFCmd : uint8_t
 {
     VIF_NOP = 0x00,
@@ -94,6 +98,8 @@ void PS2Memory::processVIF0Data(const uint8_t *data, uint32_t sizeBytes)
         }
         else if (opcode == VIF_FLUSHE || opcode == VIF_FLUSH || opcode == VIF_FLUSHA)
         {
+            if (opcode == VIF_FLUSHA)
+                path3Trace("flusha", g_path3ReleasePending);
             continue;
         }
         else if (opcode == VIF_STMASK)
@@ -355,9 +361,25 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         {
             // VIF command docs: MSKPATH3 uses IMMEDIATE bit 15.
             const bool wasMasked = m_path3Masked;
-            m_path3Masked = (imm & 0x8000u) != 0u;
-            if (wasMasked && !m_path3Masked)
-                flushMaskedPath3Packets();
+            const bool masked = (imm & 0x8000u) != 0u;
+            if (wasMasked && !masked)
+            {
+                // Unmasked: wait to see whether the game masks again right away (one packet) or moves on (all).
+                m_path3Masked = false;
+                g_path3ReleasePending = !m_path3MaskedFifo.empty();
+                path3Trace("unmask", m_path3MaskedFifo.size());
+            }
+            else if (!wasMasked && masked)
+            {
+                path3Trace("mask", g_path3ReleasePending);
+                if (g_path3ReleasePending)
+                {
+                    g_path3ReleaseOne = true;
+                    flushMaskedPath3Packets();
+                    g_path3ReleaseOne = false;
+                }
+                m_path3Masked = true;
+            }
             continue;
         }
         else if (opcode == VIF_MARK)
@@ -368,6 +390,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         }
         else if (opcode == VIF_FLUSHE || opcode == VIF_FLUSH || opcode == VIF_FLUSHA)
         {
+            if (opcode == VIF_FLUSHA)
+                path3Trace("flusha", g_path3ReleasePending);
             continue;
         }
         else if (opcode == VIF_MSCAL || opcode == VIF_MSCALF)

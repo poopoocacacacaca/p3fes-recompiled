@@ -2110,6 +2110,8 @@ void EeScheduler::processEvent(const EeEvent &event)
             m_runtime.memory().gs().csr.fetch_and(~0x2000ull, std::memory_order_acq_rel);
         }
         // registers consistent from the EE before waking game callbacks.
+        { extern uint64_t g_path3TraceVsync; g_path3TraceVsync = m_vsyncTick; }
+        m_runtime.memory().flushMaskedPath3Packets(); // a vsync drains PATH3 data left waiting after an unmask
         m_runtime.gs().notifyExternalVSync(m_vsyncTick, static_cast<uint32_t>(m_vsyncTick & 1u));
         // Debug aid: PS2X_RAM_DUMP=<field>:<path> writes the 32 MB of EE RAM to <path> at that vsync.
         {
